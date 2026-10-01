@@ -42,7 +42,7 @@
   ];
   const CAT = Object.fromEntries(CATS.map((c) => [c.key, c]));
   // Busy categories only show when zoomed in, so the map stays calm.
-  const MIN_ZOOM = { cafes: 15, restaurants: 15, bars: 15, pharmacies: 14, hospitals: 13 };
+  const MIN_ZOOM = { cafes: 14, restaurants: 14, bars: 14, pharmacies: 13, hospitals: 12 }; // MapLibre zoom levels
 
   function categorize(t) {
     const a = t.amenity, tr = t.tourism, l = t.leisure;
@@ -227,9 +227,16 @@
   function readCache() { try { return JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); } catch (e) { return null; } }
   function writeCache(items) { try { localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), items })); } catch (e) { /* full */ } }
 
+  // ---------- visited ----------
+  const VISITED_KEY = 'niniko.visited.v1';
+  let visited = {};
+  try { visited = JSON.parse(localStorage.getItem(VISITED_KEY) || '{}') || {}; } catch (e) { visited = {}; }
+  const saveVisited = () => { try { localStorage.setItem(VISITED_KEY, JSON.stringify(visited)); } catch (e) { /* full */ } };
+
   // ---------- presentation ----------
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const svg = (paths) => `<svg viewBox="0 0 24 24" aria-hidden="true">${paths}</svg>`;
+  const fmtDay = (ms) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' });
 
   function decorate(raw) {
     const t = raw.tags, cat = categorize(t);
@@ -239,9 +246,13 @@
     return { ...raw, cat, name, alt };
   }
 
-  function placeIcon(p) {
-    const c = CAT[p.cat];
-    return L.divIcon({ className: '', html: `<div class="poi" style="--c:${c.color}">${svg(c.icon)}</div>`, iconSize: [26, 26], iconAnchor: [13, 13], popupAnchor: [0, -12] });
+  function markerEl(p) {
+    const c = CAT[p.cat], el = document.createElement('div');
+    el.className = 'poi' + (visited[p.id] ? ' is-visited' : '');
+    el.style.setProperty('--c', c.color);
+    el.title = p.name;
+    el.innerHTML = svg(c.icon) + '<span class="poi-check" aria-hidden="true"></span>';
+    return el;
   }
 
   function popupHtml(p) {
@@ -255,6 +266,8 @@
     if (st) status = `<span class="pill ${st.open ? 'pill-open' : 'pill-closed'}">${esc(st.text)}</span>`;
     else if (t.opening_hours) status = '<span class="pill">Check hours below</span>';
     else if (p.cat !== 'parks' && !findCurated(p)) status = '<span class="pill">Hours not listed</span>';
+    const v = visited[p.id];
+    const visitTag = v ? `<span class="pill pill-visited">Visited · ${esc(fmtDay(v))}</span>` : '<span class="pill pill-new">Not visited yet</span>';
     let ticket = '';
     if (tk) {
       if (tk.needs) {
@@ -265,58 +278,92 @@
     }
     const hours = t.opening_hours ? `<div class="hours">${esc(t.opening_hours).replace(/;\s*/g, '<br>')}</div>` : '';
     const links = [
-      `<a href="https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}" target="_blank" rel="noopener">Directions</a>`,
       site ? `<a href="${esc(/^https?:/.test(site) ? site : 'https://' + site)}" target="_blank" rel="noopener">Website</a>` : '',
       phone ? `<a href="tel:${esc(phone.split(/[;,]/)[0].replace(/\s/g, ''))}">${esc(phone.split(/[;,]/)[0])}</a>` : '',
     ].filter(Boolean).join(' · ');
     return `<div class="pop"><div class="cat" style="color:${c.color}">${c.one}</div>
       <h3>${esc(p.name)}</h3>${p.alt ? `<div class="when">${esc(p.alt)}</div>` : ''}
-      ${status}${hours}${ticket}
+      <div class="pills">${visitTag}${status}</div>${hours}${ticket}
       ${addr ? `<div class="when">${esc(addr)}</div>` : ''}
-      <div class="links">${links}</div>
-      <div class="row"><button class="btn btn-sm" data-act="memory">Add a memory here</button></div></div>`;
+      ${links ? `<div class="links">${links}</div>` : ''}
+      <div class="row"><button class="btn btn-sm btn-primary" data-act="go">Walk there</button>
+      <button class="btn btn-sm" data-act="visit">${v ? 'Mark not visited' : 'Mark visited'}</button>
+      <button class="btn btn-sm" data-act="memory">Add memory</button></div></div>`;
   }
 
   // ---------- layer ----------
   function init(map, opts) {
-    const layer = L.layerGroup().addTo(map);
     let places = [];
+    const shown = new Map(); // id -> marker
     let filters;
     try { filters = JSON.parse(localStorage.getItem(FILTER_KEY) || 'null'); } catch (e) { filters = null; }
     if (!filters) filters = Object.fromEntries(CATS.map((c) => [c.key, c.on]));
     let openOnly = false;
+    let visitMode = 'all'; // all | todo | done
+    const VISIT_LABEL = { all: 'All places', todo: 'Not visited', done: 'Visited' };
 
     const bar = document.getElementById('chips');
     function renderChips() {
       bar.innerHTML = `<button type="button" class="chip chip-open${openOnly ? ' on' : ''}" data-k="__open" aria-pressed="${openOnly}">Open now</button>` +
+        `<button type="button" class="chip chip-visit${visitMode !== 'all' ? ' on' : ''}" data-k="__visit">${VISIT_LABEL[visitMode]}</button>` +
         CATS.map((c) => `<button type="button" class="chip${filters[c.key] ? ' on' : ''}" data-k="${c.key}" style="--c:${c.color}" aria-pressed="${!!filters[c.key]}">${svg(c.icon)}${c.label}</button>`).join('');
     }
     bar.addEventListener('click', (e) => {
       const b = e.target.closest('.chip'); if (!b) return;
       const k = b.dataset.k;
-      if (k === '__open') openOnly = !openOnly; else filters[k] = !filters[k];
+      if (k === '__open') openOnly = !openOnly;
+      else if (k === '__visit') visitMode = visitMode === 'all' ? 'todo' : visitMode === 'todo' ? 'done' : 'all';
+      else filters[k] = !filters[k];
       try { localStorage.setItem(FILTER_KEY, JSON.stringify(filters)); } catch (err) { /* ignore */ }
       renderChips(); render();
     });
 
-    function render() {
-      layer.clearLayers();
-      const z = map.getZoom(), view = map.getBounds().pad(0.3);
-      for (const p of places) {
-        if (!filters[p.cat]) continue;
-        if (z < (MIN_ZOOM[p.cat] || 0)) continue;
-        if (!view.contains([p.lat, p.lng])) continue;
-        if (openOnly && isOpenNow(p.tags.opening_hours) !== true) continue;
-        const mk = L.marker([p.lat, p.lng], { icon: placeIcon(p), title: p.name, keyboard: true });
-        mk.bindPopup(() => popupHtml(p), { maxWidth: 280 });
-        mk.on('popupopen', (e) => {
-          const btn = e.popup.getElement().querySelector('[data-act="memory"]');
-          if (btn) btn.onclick = () => { map.closePopup(); opts.onAddMemory(L.latLng(p.lat, p.lng), p.name); };
-        });
-        mk.addTo(layer);
-      }
+    function wanted(p, z, bounds) {
+      if (!filters[p.cat]) return false;
+      if (z < (MIN_ZOOM[p.cat] || 0)) return false;
+      if (!bounds.contains([p.lng, p.lat])) return false;
+      if (openOnly && isOpenNow(p.tags.opening_hours) !== true) return false;
+      if (visitMode === 'todo' && visited[p.id]) return false;
+      if (visitMode === 'done' && !visited[p.id]) return false;
+      return true;
     }
-    let t; map.on('moveend zoomend', () => { clearTimeout(t); t = setTimeout(render, 120); });
+
+    function render() {
+      const z = map.getZoom();
+      const b = map.getBounds(), padLng = (b.getEast() - b.getWest()) * 0.3, padLat = (b.getNorth() - b.getSouth()) * 0.3;
+      const bounds = new maplibregl.LngLatBounds([b.getWest() - padLng, b.getSouth() - padLat], [b.getEast() + padLng, b.getNorth() + padLat]);
+      const keep = new Set();
+      for (const p of places) {
+        if (!wanted(p, z, bounds)) continue;
+        keep.add(p.id);
+        if (!shown.has(p.id)) shown.set(p.id, opts.marker(p.lat, p.lng, markerEl(p), () => openPlace(p), 'center'));
+      }
+      for (const [id, mk] of shown) if (!keep.has(id)) { mk.remove(); shown.delete(id); }
+    }
+
+    function refreshMarker(p) {
+      const mk = shown.get(p.id);
+      if (mk) mk.getElement().classList.toggle('is-visited', !!visited[p.id]);
+    }
+
+    function setVisited(p, on) {
+      if (on) visited[p.id] = Date.now(); else delete visited[p.id];
+      saveVisited(); refreshMarker(p);
+    }
+
+    function openPlace(p) {
+      opts.openPopup([p.lng, p.lat], popupHtml(p), (el) => {
+        el.querySelector('[data-act="go"]').onclick = () => opts.onDirections({ lat: p.lat, lng: p.lng, name: p.name, placeId: p.id });
+        el.querySelector('[data-act="memory"]').onclick = () => { opts.closePopup(); opts.onAddMemory({ lat: p.lat, lng: p.lng }, p.name); };
+        el.querySelector('[data-act="visit"]').onclick = () => {
+          setVisited(p, !visited[p.id]);
+          opts.toast(visited[p.id] ? `Marked ${p.name} as visited` : `Marked ${p.name} as not visited`);
+          if (visitMode !== 'all') { opts.closePopup(); render(); } else openPlace(p);
+        };
+      }, { offset: 16 });
+    }
+
+    let t; map.on('moveend', () => { clearTimeout(t); t = setTimeout(render, 120); });
 
     function setPlaces(raw) {
       const seen = new Set();
@@ -324,6 +371,8 @@
       places.forEach((p) => { const k = findCurated(p); if (k) seen.add(k.name); });
       // Make sure the main paid sights are on the map even if OSM names them differently.
       for (const k of TICKETS) if (!seen.has(k.name)) places.push({ id: 'k-' + k.name, lat: k.lat, lng: k.lng, cat: k.cat, name: k.name, alt: '', tags: { name: k.name } });
+      for (const mk of shown.values()) mk.remove();
+      shown.clear();
       render();
     }
 
@@ -334,9 +383,28 @@
       fetchPlaces().then((items) => { writeCache(items); setPlaces(items); })
         .catch(() => { if (!cached) opts.toast && opts.toast('Could not load places right now. They will appear when you are online.'); });
     }
-    // Refresh open/closed filtering every few minutes.
     setInterval(() => { if (openOnly) render(); }, 5 * 60000);
-    return { render };
+
+    return {
+      render,
+      // Places within `m` metres of a point, nearest first.
+      near(lat, lng, m) {
+        const out = [];
+        for (const p of places) {
+          const dLat = (p.lat - lat) * 111320, dLng = (p.lng - lng) * 111320 * Math.cos(lat * Math.PI / 180);
+          const d = Math.hypot(dLat, dLng);
+          if (d <= m) out.push({ p, d });
+        }
+        return out.sort((a, b) => a.d - b.d).map((x) => x.p);
+      },
+      markVisited(id) { const p = places.find((x) => x.id === id); if (p && !visited[p.id]) { setVisited(p, true); return p; } return null; },
+      visitedList() {
+        return Object.entries(visited).map(([id, at]) => ({ at, p: places.find((x) => x.id === id) })).filter((x) => x.p).sort((a, b) => b.at - a.at);
+      },
+      open: openPlace,
+      exportVisited: () => ({ ...visited }),
+      importVisited(v) { Object.assign(visited, v || {}); saveVisited(); for (const mk of shown.values()) mk.remove(); shown.clear(); render(); },
+    };
   }
 
   window.NinikoPlaces = { init, _test: { parseHours, openStatus, isOpenAt } };

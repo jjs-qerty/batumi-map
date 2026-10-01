@@ -3,14 +3,15 @@
 A phone web app with a map of Batumi that remembers the streets you walked and the places where memories were made.
 
 ## What it does
-- **Start walk / Finish walk** records your route with GPS and draws it in pink. Every walk stays on the map, so the streets you have walked fill in over time.
-- **Memory** pins a place (where you are now, or any spot you tap) with a title, date, story and an optional photo.
-- **My map** lists walks and memories, lets you draw a past walk by tapping along streets, and saves or restores a backup file.
-- **Trail times**: tap any point of a recorded walk to see when you were there.
-- **Automatic trail**: while the app is open it records where you go (turn this off in *My map*). A break of more than 30 minutes starts a new walk.
-- **Places**: chips at the top show sights, museums, galleries, event venues, parks, cafés, restaurants, bars, pharmacies and hospitals from OpenStreetMap. Each place shows whether it is open now (Batumi time, from its listed opening hours) and whether you need a ticket. The main paid sights have notes on price and where to buy; prices are the last known ones and should be checked. *Open now* hides closed places.
-- **Events**: there is no free live feed of Batumi events, so the map shows event venues (theatres, cinemas, arts centres, clubs, stadiums) with links to tkt.ge and biletebi.ge for what's on.
-- Everything is stored on the phone only. Use *Save a backup* now and then.
+- **Calm map with 3D**: a light OpenFreeMap vector map (Positron style). The **3D** button tilts the map and raises the buildings. If that map can't load, the app falls back to plain OpenStreetMap tiles.
+- **Start walk / Finish** records your route with GPS. With *Record my trail whenever the app is open* (in **My map**) it starts by itself. Tap any point of a trail to see when you were there.
+- **Photo** opens the camera. The photo is saved to the memory you're standing at (within 30 m), or starts a new memory there, named after the nearest place.
+- **Memory** saves a place with a title, date, story and photos.
+- **Pin** drops your own pin with a name, colour and note. Press and hold anywhere on the map for a quick pin, memory or directions to that spot.
+- **Places**: chips at the top show sights, museums, galleries, event venues, parks, cafés, restaurants, bars, pharmacies and hospitals from OpenStreetMap, with open/closed status (Batumi time), ticket notes and a visited tag. *All places / Not visited / Visited* filters by the tag.
+- **Walk there** draws a walking route inside the app (OSRM foot routing from routing.openstreetmap.de), shows minutes, distance and the next turn, re-plans if you wander off, and marks the place visited when you arrive. *Google Maps* is there as a backup.
+- **Events**: there is no free live feed of Batumi events, so the map shows event venues with links to tkt.ge and biletebi.ge.
+- Everything is stored on the phone only. Use *Save a backup* in **My map** now and then.
 
 ## Putting it on your phone
 The app is hosted at **https://jjs-qerty.github.io/batumi-map/** (GitHub Pages from the `main` branch). Open that link on your phone and add it to your home screen:
@@ -35,4 +36,4 @@ GitHub Pages works too and is free; it needs a GitHub repository.
 - Recording in the background with the screen off would need a native iPhone/Android app.
 
 ## Files
-`index.html`, `app.css`, `app.js` (the app), `poi.js` (places, opening hours, ticket notes), `sw.js` (offline support and map tile caching), `manifest.webmanifest` and `icons/` (home-screen install), `vendor/` (Leaflet 1.9.4 map library). Map data © OpenStreetMap contributors, places via the Overpass API.
+`index.html`, `app.css`, `app.js` (the app), `poi.js` (places, opening hours, ticket notes, visited tags), `sw.js` (offline support and map tile caching), `manifest.webmanifest` and `icons/` (home-screen install), `vendor/` (MapLibre GL JS 5.24.0). Map data © OpenStreetMap contributors, map style and tiles by OpenFreeMap, places via the Overpass API, walking routes via routing.openstreetmap.de.

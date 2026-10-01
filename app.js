@@ -1,20 +1,31 @@
-/* Niniko's Map: walks and memories around Batumi, saved on this device. */
+/* Niniko's Map: walks, memories, pins and places around Batumi, saved on this device. */
 (function () {
   'use strict';
 
-  const BATUMI = [41.6430, 41.6360]; // Old Boulevard / Europe Square area
+  const BATUMI = [41.6430, 41.6360]; // Old Boulevard / Europe Square area, [lat, lng]
+  const STYLE_URL = 'https://tiles.openfreemap.org/styles/positron'; // free, no key, light and calm
+  const FALLBACK_STYLE = {
+    version: 8,
+    sources: { osm: { type: 'raster', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], tileSize: 256, maxzoom: 19,
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' } },
+    layers: [{ id: 'osm', type: 'raster', source: 'osm', paint: { 'raster-saturation': -0.55, 'raster-brightness-min': 0.08, 'raster-contrast': -0.08 } }],
+  };
+  const ROUTER = 'https://routing.openstreetmap.de/routed-foot/route/v1/driving/';
   const MIN_STEP_M = 5;              // ignore GPS jitter smaller than this
+  const MAX_ACCURACY_M = 40;         // ignore fixes worse than this
   const AUTO_KEY = 'niniko.autoRecord';
   const AUTO_GAP_MS = 30 * 60000;    // a trail paused longer than this becomes its own walk
   const AUTO_MIN_M = 50;             // automatic trails shorter than this are dropped
-  const MAX_ACCURACY_M = 40;         // ignore fixes worse than this
   const REC_KEY = 'niniko.recording';
+  const PHOTO_JOIN_M = 30;           // a photo within this distance of a memory joins that memory
+  const PIN_COLORS = ['#e8456b', '#f2a516', '#2b8a3e', '#1c7ed6', '#7048e8', '#495057'];
 
   // ---------- tiny helpers ----------
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const todayISO = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const ll = (p) => [p[1], p[0]]; // [lat, lng] -> [lng, lat]
 
   function haversine(a, b) {
     const R = 6371000, toR = Math.PI / 180;
@@ -32,11 +43,17 @@
     const s = Math.max(0, Math.round(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
     return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
   }
+  function fmtMinutes(sec) { const m = Math.max(1, Math.round(sec / 60)); return m < 60 ? m + ' min' : Math.floor(m / 60) + ' h ' + (m % 60) + ' min'; }
   function fmtDate(isoOrMs) {
     const d = typeof isoOrMs === 'number' ? new Date(isoOrMs) : new Date(isoOrMs + 'T12:00:00');
     return d.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' });
   }
   function fmtTime(ms) { return new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }); }
+  function fmtClock(ms) {
+    const d = new Date(ms), sameDay = d.toDateString() === new Date().toDateString();
+    return fmtTime(ms) + (sameDay ? ' today' : ', ' + d.toLocaleDateString(undefined, { day: 'numeric', month: 'long' }));
+  }
+  const photosOf = (m) => (m.photos && m.photos.length ? m.photos : (m.photo ? [m.photo] : []));
 
   let toastTimer;
   function toast(msg, ms = 2600) {
@@ -46,18 +63,18 @@
   }
 
   // ---------- storage (IndexedDB, falls back to memory) ----------
+  const STORES = ['walks', 'memories', 'pins'];
   const store = (function () {
     let dbp = null;
-    const mem = { walks: new Map(), memories: new Map() };
+    const mem = Object.fromEntries(STORES.map((n) => [n, new Map()]));
     function open() {
       if (dbp) return dbp;
       dbp = new Promise((resolve) => {
         try {
-          const req = indexedDB.open('niniko-map', 1);
+          const req = indexedDB.open('niniko-map', 2);
           req.onupgradeneeded = () => {
             const db = req.result;
-            if (!db.objectStoreNames.contains('walks')) db.createObjectStore('walks', { keyPath: 'id' });
-            if (!db.objectStoreNames.contains('memories')) db.createObjectStore('memories', { keyPath: 'id' });
+            for (const n of STORES) if (!db.objectStoreNames.contains(n)) db.createObjectStore(n, { keyPath: 'id' });
           };
           req.onsuccess = () => resolve(req.result);
           req.onerror = () => resolve(null);
@@ -75,123 +92,178 @@
       }));
     }
     return {
-      all(name) {
-        return tx(name, 'readonly', (os) => os ? os.getAll() : Array.from(mem[name].values()));
-      },
+      all(name) { return tx(name, 'readonly', (os) => os ? os.getAll() : Array.from(mem[name].values())); },
       put(name, obj) {
-        return tx(name, 'readwrite', (os) => { if (os) os.put(obj); else mem[name].set(obj.id, obj); return obj; });
+        const clean = { ...obj }; delete clean._marker;
+        return tx(name, 'readwrite', (os) => { if (os) os.put(clean); else mem[name].set(clean.id, clean); return clean; });
       },
-      del(name, id) {
-        return tx(name, 'readwrite', (os) => { if (os) os.delete(id); else mem[name].delete(id); return id; });
-      },
+      del(name, id) { return tx(name, 'readwrite', (os) => { if (os) os.delete(id); else mem[name].delete(id); return id; }); },
     };
   })();
 
-  // ---------- map ----------
-  // Keep popups clear of the title, filter chips and bottom toolbar when they open.
-  L.Popup.mergeOptions({ autoPanPaddingTopLeft: L.point(12, 170), autoPanPaddingBottomRight: L.point(12, 110) });
-  const map = L.map('map', { zoomControl: false, attributionControl: true }).setView(BATUMI, 15);
-  // OpenStreetMap tiles (free, no key). app.css softens their colours, and darkens them in dark mode.
-  const darkQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19, className: 'base-tiles',
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-  }).addTo(map);
-  if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change', () => renderAll());
-
-  const walkColor = () => getComputedStyle(document.documentElement).getPropertyValue('--walk').trim() || '#e8456b';
-  const walkStyle = () => ({ color: walkColor(), weight: 6, opacity: 0.6, lineCap: 'round', lineJoin: 'round' });
-
-  const walksLayer = L.layerGroup().addTo(map);
-  const memoriesLayer = L.layerGroup().addTo(map);
-  let meMarker = null, meCircle = null;
-
   const state = {
-    walks: [],
-    memories: [],
+    walks: [], memories: [], pins: [],
     recording: null,  // { id, startedAt, points: [[lat,lng,t]] }
-    recLine: null,
-    watchId: null,
+    recUnsub: null,
     wakeLock: null,
-    mode: 'idle',     // idle | pickMemory | drawWalk
-    draw: null,       // { points: [], line, vertices }
-    pendingMemory: null,
+    mode: 'idle',     // idle | pickMemory | pickPin | drawWalk
+    draw: null,       // { points: [] }
+    threeD: false,
   };
+  const walkColor = () => getComputedStyle(document.documentElement).getPropertyValue('--walk').trim() || '#e8456b';
+
+  // ---------- map ----------
+  const map = new maplibregl.Map({
+    container: 'map', style: STYLE_URL, center: ll(BATUMI), zoom: 14, maxPitch: 70,
+    attributionControl: { compact: true }, dragRotate: true, pitchWithRotate: true,
+  });
+  map.touchZoomRotate.enableRotation();
+
+  // If the vector map can't load on this phone, fall back to plain OpenStreetMap tiles.
+  let styleReady = false, usingFallback = false;
+  function useFallback() {
+    if (usingFallback) return;
+    usingFallback = true; styleReady = false;
+    map.setStyle(FALLBACK_STYLE);
+  }
+  map.on('error', () => { if (!styleReady) useFallback(); });
+  setTimeout(() => { if (!styleReady) useFallback(); }, 12000);
+
+  // Overlay data is kept here so it survives a style switch.
+  const geo = {};
+  const EMPTY = { type: 'FeatureCollection', features: [] };
+  function setGeo(id, data) {
+    geo[id] = data;
+    const src = map.getSource(id);
+    if (src) src.setData(data);
+  }
+  const line = (pts, props) => ({ type: 'Feature', properties: props || {}, geometry: { type: 'LineString', coordinates: pts.map(ll) } });
+  const point = (p, props) => ({ type: 'Feature', properties: props || {}, geometry: { type: 'Point', coordinates: ll(p) } });
+  const fc = (features) => ({ type: 'FeatureCollection', features });
+
+  function addOverlays() {
+    const wc = walkColor();
+    for (const id of ['walks', 'rec', 'route', 'draw', 'dot']) if (!map.getSource(id)) map.addSource(id, { type: 'geojson', data: geo[id] || EMPTY });
+    const round = { 'line-cap': 'round', 'line-join': 'round' };
+    const add = (layer) => { if (!map.getLayer(layer.id)) map.addLayer(layer); };
+    add3dBuildings();
+    add({ id: 'route-casing', type: 'line', source: 'route', layout: round, paint: { 'line-color': '#ffffff', 'line-width': 10, 'line-opacity': 0.9 } });
+    add({ id: 'route-line', type: 'line', source: 'route', layout: round, paint: { 'line-color': '#2f7cf6', 'line-width': 6 } });
+    add({ id: 'walks-line', type: 'line', source: 'walks', layout: round, paint: { 'line-color': wc, 'line-width': 5, 'line-opacity': 0.65 } });
+    add({ id: 'walks-hit', type: 'line', source: 'walks', layout: round, paint: { 'line-color': '#000', 'line-width': 26, 'line-opacity': 0.01 } });
+    add({ id: 'rec-line', type: 'line', source: 'rec', layout: round, paint: { 'line-color': wc, 'line-width': 5.5, 'line-opacity': 0.95 } });
+    add({ id: 'rec-hit', type: 'line', source: 'rec', layout: round, paint: { 'line-color': '#000', 'line-width': 26, 'line-opacity': 0.01 } });
+    add({ id: 'draw-line', type: 'line', source: 'draw', filter: ['==', '$type', 'LineString'], layout: round, paint: { 'line-color': wc, 'line-width': 4, 'line-dasharray': [0.5, 2] } });
+    add({ id: 'draw-pts', type: 'circle', source: 'draw', filter: ['==', '$type', 'Point'], paint: { 'circle-radius': 6, 'circle-color': wc, 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } });
+    add({ id: 'dot', type: 'circle', source: 'dot', paint: { 'circle-radius': 7, 'circle-color': wc, 'circle-stroke-color': '#fff', 'circle-stroke-width': 3 } });
+  }
+
+  // 3D buildings from the vector map's building layer.
+  function add3dBuildings() {
+    if (map.getLayer('buildings-3d')) return;
+    const sources = map.getStyle().sources || {};
+    const src = sources.openmaptiles ? 'openmaptiles' : Object.keys(sources).find((k) => sources[k].type === 'vector');
+    if (!src) return;
+    const firstSymbol = (map.getStyle().layers || []).find((l) => l.type === 'symbol');
+    try {
+      map.addLayer({
+        id: 'buildings-3d', type: 'fill-extrusion', source: src, 'source-layer': 'building', minzoom: 13,
+        layout: { visibility: state.threeD ? 'visible' : 'none' },
+        paint: {
+          'fill-extrusion-color': ['interpolate', ['linear'], ['coalesce', ['get', 'render_height'], 8], 0, '#f1ede6', 60, '#e4ddd3'],
+          'fill-extrusion-height': ['coalesce', ['get', 'render_height'], ['get', 'height'], 8],
+          'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], ['get', 'min_height'], 0],
+          'fill-extrusion-opacity': 0.85,
+        },
+      }, firstSymbol && firstSymbol.id);
+    } catch (e) { /* this map has no buildings layer */ }
+  }
+
+  map.on('style.load', () => { styleReady = true; addOverlays(); });
+
+  // ---------- popups and markers ----------
+  let popup = null, popupClosing = null;
+  function closePopup() { if (popup) { const p = popup; popup = null; p.remove(); } }
+  function openPopup(lngLat, html, wire, o) {
+    closePopup();
+    const p = popup = new maplibregl.Popup({ maxWidth: '300px', offset: (o && o.offset) || 14, anchor: 'bottom', focusAfterOpen: false })
+      .setLngLat(lngLat).setHTML(html).addTo(map);
+    p.on('close', () => { if (popup === p) popup = null; setGeo('dot', EMPTY); if (popupClosing) { const c = popupClosing; popupClosing = null; c(); } });
+    if (wire) wire(p.getElement());
+    // Keep the whole popup clear of the title and chips at the top and the toolbar at the bottom.
+    const fit = () => {
+      if (popup !== p) return;
+      const pt = map.project(lngLat), r = p.getElement().getBoundingClientRect();
+      const W = map.getContainer().clientWidth, maxY = map.getContainer().clientHeight - 100, minTop = 160;
+      let dx = 0, dy = 0;
+      if (r.left < 8) dx = r.left - 8; else if (r.right > W - 8) dx = r.right - (W - 8);
+      if (pt.y - r.height < minTop) dy = pt.y - r.height - minTop; else if (pt.y > maxY) dy = pt.y - maxY;
+      if (dx || dy) map.panBy([dx, dy], { duration: 250 });
+    };
+    requestAnimationFrame(fit);
+    setTimeout(fit, 400); // again once photos have their real height
+    return p;
+  }
+
+  function marker(lat, lng, el, onTap, anchor) {
+    el.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      if (state.mode !== 'idle') { handleMapTap({ lat, lng }); return; }
+      onTap();
+    });
+    return new maplibregl.Marker({ element: el, anchor: anchor || 'bottom' }).setLngLat([lng, lat]).addTo(map);
+  }
 
   // ---------- rendering ----------
+  const walksLayerData = () => fc(state.walks.filter((w) => w.points.length > 1).map((w) => line(w.points, { id: w.id })));
+  let memoryMarkers = [], pinMarkers = [];
+
   function renderStats() {
     const km = state.walks.reduce((s, w) => s + (w.distance || 0), 0);
     $('stats').innerHTML = `<span class="sw" style="background:${walkColor()}"></span><b>${fmtDist(km)}</b> walked · <b>${state.memories.length}</b> ${state.memories.length === 1 ? 'memory' : 'memories'}`;
   }
 
-  function renderWalks() {
-    walksLayer.clearLayers();
-    for (const w of state.walks) {
-      const pts = w.points.map((p) => [p[0], p[1]]);
-      L.polyline(pts, { ...walkStyle(), interactive: false }).addTo(walksLayer);
-      trailHitLine(pts, (latlng) => openWalkPopup(w, latlng)).addTo(walksLayer);
-    }
+  function memoryEl(m) {
+    const el = document.createElement('div'), ph = photosOf(m)[0];
+    el.className = 'pin' + (ph ? ' has-photo' : '');
+    if (ph) el.style.backgroundImage = `url('${ph}')`;
+    el.title = m.title;
+    el.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.4-7 10-7 10z"/></svg>';
+    return el;
   }
-
-  function memoryIcon(m) {
-    const style = m.photo ? ` style="background-image:url('${m.photo}')"` : '';
-    return L.divIcon({
-      className: '',
-      html: `<div class="pin${m.photo ? ' has-photo' : ''}"${style}><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.4-7 10-7 10z"/></svg></div>`,
-      iconSize: [34, 34], iconAnchor: [17, 40], popupAnchor: [0, -38],
-    });
+  function pinEl(p) {
+    const el = document.createElement('div');
+    el.className = 'upin'; el.style.setProperty('--c', p.color || PIN_COLORS[0]); el.title = p.name;
+    el.innerHTML = '<svg viewBox="0 0 24 32" aria-hidden="true"><path d="M12 31s10-11.2 10-19A10 10 0 0 0 2 12c0 7.8 10 19 10 19z"/><circle cx="12" cy="12" r="4"/></svg>';
+    return el;
   }
 
   function renderMemories() {
-    memoriesLayer.clearLayers();
-    for (const m of state.memories) {
-      const mk = L.marker([m.lat, m.lng], { icon: memoryIcon(m), title: m.title, keyboard: true });
-      mk.bindPopup(() => memoryPopupHtml(m), { maxWidth: 270 });
-      mk.on('popupopen', (e) => wireMemoryPopup(e.popup, m));
-      mk.addTo(memoriesLayer);
-      m._marker = mk;
-    }
+    memoryMarkers.forEach((mk) => mk.remove());
+    memoryMarkers = state.memories.map((m) => (m._marker = marker(m.lat, m.lng, memoryEl(m), () => openMemoryPopup(m))));
   }
-
-  function renderAll() { renderWalks(); renderMemories(); renderStats(); }
-
-  // A wide invisible line on top of each trail so it is easy to tap with a finger.
-  function trailHitLine(pts, onTap) {
-    const hit = L.polyline(pts, { color: '#000', opacity: 0, weight: 26, lineCap: 'round', lineJoin: 'round' });
-    hit.on('click', (e) => {
-      L.DomEvent.stopPropagation(e);
-      if (state.mode !== 'idle') handleMapTap(e.latlng); else onTap(e.latlng);
-    });
-    return hit;
+  function renderPins() {
+    pinMarkers.forEach((mk) => mk.remove());
+    pinMarkers = state.pins.map((p) => (p._marker = marker(p.lat, p.lng, pinEl(p), () => openPinPopup(p))));
   }
+  function renderAll() { setGeo('walks', walksLayerData()); renderMemories(); renderPins(); renderStats(); }
 
   // The recorded point closest to where the trail was tapped.
-  function nearestPoint(points, latlng) {
-    const tap = map.latLngToLayerPoint(latlng);
+  function nearestPoint(points, lngLat) {
+    const tap = map.project(lngLat);
     let best = null, bestD = Infinity;
     for (const p of points) {
-      const d = map.latLngToLayerPoint([p[0], p[1]]).distanceTo(tap);
+      const q = map.project(ll(p)), d = Math.hypot(q.x - tap.x, q.y - tap.y);
       if (d < bestD) { bestD = d; best = p; }
     }
     return best;
   }
-
-  let trailDot = null;
-  function markTrailPoint(p) {
-    if (trailDot) map.removeLayer(trailDot);
-    trailDot = L.circleMarker([p[0], p[1]], { radius: 7, color: '#fff', weight: 3, fillColor: walkColor(), fillOpacity: 1, interactive: false }).addTo(map);
-  }
-  map.on('popupclose', () => { if (trailDot) { map.removeLayer(trailDot); trailDot = null; } });
-
-  function fmtClock(ms) {
-    const d = new Date(ms), sameDay = d.toDateString() === new Date().toDateString();
-    return fmtTime(ms) + (sameDay ? ' today' : ', ' + d.toLocaleDateString(undefined, { day: 'numeric', month: 'long' }));
-  }
+  const markTrailPoint = (p) => setGeo('dot', fc([point(p)]));
 
   // ---------- walk popups ----------
-  function openWalkPopup(w, latlng) {
+  function openWalkPopup(w, lngLat) {
     const dur = w.endedAt && w.startedAt ? ` · ${fmtDur(w.endedAt - w.startedAt)}` : '';
-    const near = nearestPoint(w.points, latlng);
+    const near = nearestPoint(w.points, lngLat);
     const atPoint = near && near[2]
       ? `<div class="here-at">You were here at <b>${fmtClock(near[2])}</b></div>`
       : (w.drawn ? '<div class="when">Drawn by hand, so there are no times on this walk.</div>' : '');
@@ -201,15 +273,22 @@
       <p>${fmtDist(w.distance)}${dur}</p>
       <div class="row"><button class="btn btn-sm" data-act="rename">Rename</button>
       <button class="btn btn-sm btn-danger" data-act="delete">Delete walk</button></div></div>`;
-    const pop = L.popup({ maxWidth: 270 }).setLatLng(near ? [near[0], near[1]] : latlng).setContent(html).openOn(map);
-    if (near && near[2]) markTrailPoint(near);
-    const el = pop.getElement();
-    el.querySelector('[data-act="rename"]').onclick = () => { map.closePopup(); openWalkForm(w); };
-    armDelete(el.querySelector('[data-act="delete"]'), async () => {
-      await store.del('walks', w.id);
-      state.walks = state.walks.filter((x) => x.id !== w.id);
-      map.closePopup(); renderAll(); toast('Walk deleted');
+    openPopup(near ? ll(near) : lngLat, html, (el) => {
+      el.querySelector('[data-act="rename"]').onclick = () => { closePopup(); openWalkForm(w); };
+      armDelete(el.querySelector('[data-act="delete"]'), async () => {
+        await store.del('walks', w.id);
+        state.walks = state.walks.filter((x) => x.id !== w.id);
+        closePopup(); renderAll(); toast('Walk deleted');
+      });
     });
+    if (near && near[2]) markTrailPoint(near);
+  }
+
+  function liveTrailPopup(lngLat) {
+    const rec = state.recording; if (!rec) return;
+    const near = nearestPoint(rec.points, lngLat); if (!near) return;
+    openPopup(ll(near), `<div class="pop"><div class="here-at">You were here at <b>${fmtClock(near[2])}</b></div><div class="when">Current trail · ${fmtDist(pathLength(rec.points))} so far</div></div>`);
+    markTrailPoint(near);
   }
 
   // Two-tap delete: first tap arms the button, second tap deletes.
@@ -223,22 +302,24 @@
   }
 
   // ---------- memory popups ----------
-  function memoryPopupHtml(m) {
-    return `<div class="pop"><h3>${esc(m.title)}</h3>
-      <div class="when">${m.date ? fmtDate(m.date) : ''}</div>
-      ${m.photo ? `<img src="${m.photo}" alt="">` : ''}
-      ${m.note ? `<p>${esc(m.note)}</p>` : ''}
+  function openMemoryPopup(m) {
+    const photos = photosOf(m);
+    const gallery = photos.length ? `<div class="gallery${photos.length > 1 ? ' multi' : ''}">${photos.map((src) => `<img src="${src}" alt="">`).join('')}</div>` : '';
+    const html = `<div class="pop"><h3>${esc(m.title)}</h3>
+      <div class="when">${m.date ? fmtDate(m.date) : ''}${photos.length > 1 ? ` · ${photos.length} photos` : ''}</div>
+      ${gallery}${m.note ? `<p>${esc(m.note)}</p>` : ''}
       <div class="row"><button class="btn btn-sm" data-act="edit">Edit</button>
+      <button class="btn btn-sm" data-act="go">Walk there</button>
       <button class="btn btn-sm btn-danger" data-act="delete">Delete</button></div></div>`;
-  }
-  function wireMemoryPopup(popup, m) {
-    const el = popup.getElement();
-    el.querySelector('[data-act="edit"]').onclick = () => { map.closePopup(); openMemoryForm(m); };
-    armDelete(el.querySelector('[data-act="delete"]'), async () => {
-      await store.del('memories', m.id);
-      state.memories = state.memories.filter((x) => x.id !== m.id);
-      map.closePopup(); renderAll(); toast('Memory deleted');
-    });
+    openPopup([m.lng, m.lat], html, (el) => {
+      el.querySelector('[data-act="edit"]').onclick = () => { closePopup(); openMemoryForm(m); };
+      el.querySelector('[data-act="go"]').onclick = () => navigateTo({ lat: m.lat, lng: m.lng, name: m.title });
+      armDelete(el.querySelector('[data-act="delete"]'), async () => {
+        await store.del('memories', m.id);
+        state.memories = state.memories.filter((x) => x.id !== m.id);
+        closePopup(); renderAll(); toast('Memory deleted');
+      });
+    }, { offset: 40 });
   }
 
   // ---------- sheet ----------
@@ -255,7 +336,10 @@
   }
   $('sheetClose').onclick = closeSheet;
   $('scrim').onclick = closeSheet;
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('sheet').hidden) closeSheet(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (!$('sheet').hidden) closeSheet(); else closePopup();
+  });
 
   function h(html) { const d = document.createElement('div'); d.style.display = 'contents'; d.innerHTML = html; return d; }
 
@@ -271,7 +355,6 @@
     $('hint').hidden = false;
   }
   function hideHint() { $('hint').hidden = true; }
-
   function setMode(mode) {
     state.mode = mode;
     document.body.classList.toggle('picking', mode !== 'idle');
@@ -279,44 +362,77 @@
   }
 
   // ---------- location ----------
-  function showMe(lat, lng, acc) {
+  let meMarker = null;
+  function showMe(lat, lng) {
     if (!meMarker) {
-      meMarker = L.marker([lat, lng], { icon: L.divIcon({ className: '', html: '<div class="me-dot"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }), interactive: false, zIndexOffset: 1000 }).addTo(map);
-      meCircle = L.circle([lat, lng], { radius: acc || 0, color: '#2f7cf6', weight: 1, opacity: 0.4, fillOpacity: 0.08, interactive: false }).addTo(map);
-    } else {
-      meMarker.setLatLng([lat, lng]); meCircle.setLatLng([lat, lng]).setRadius(acc || 0);
-    }
+      const el = document.createElement('div'); el.className = 'me-dot';
+      meMarker = new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat([lng, lat]).addTo(map);
+    } else meMarker.setLngLat([lng, lat]);
   }
 
   function geoError(err) {
-    if (!window.isSecureContext) return 'Location needs the app to be opened over https://. See the hosting notes.';
+    if (!window.isSecureContext) return 'Location needs the app to be opened over https://.';
     if (err && err.code === 1) return 'Location is blocked. Allow location for this app in your phone settings.';
     if (err && err.code === 3) return 'Still looking for GPS. Step outside or wait a moment.';
     return 'Could not get your location right now.';
   }
 
-  function locateOnce() {
+  // One shared GPS watch for recording, directions and the blue dot.
+  const gps = (function () {
+    const subs = new Set();
+    let watchId = null, last = null;
+    function start() {
+      if (watchId != null || !('geolocation' in navigator)) return;
+      watchId = navigator.geolocation.watchPosition((pos) => {
+        last = { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy, t: pos.timestamp || Date.now() };
+        showMe(last.lat, last.lng);
+        subs.forEach((s) => s.fn(last));
+      }, (err) => { subs.forEach((s) => s.onError && s.onError(err)); }, { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
+    }
+    return {
+      subscribe(fn, onError) {
+        const s = { fn, onError }; subs.add(s); start();
+        if (last && Date.now() - last.t < 5000) fn(last);
+        return () => { subs.delete(s); if (!subs.size && watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; } };
+      },
+      get last() { return last; },
+    };
+  })();
+
+  function currentFix() {
+    if (gps.last && Date.now() - gps.last.t < 20000) return Promise.resolve(gps.last);
     return new Promise((resolve, reject) => {
       if (!('geolocation' in navigator)) { reject(new Error('no geolocation')); return; }
-      navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 });
+      navigator.geolocation.getCurrentPosition((pos) => {
+        const f = { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy, t: Date.now() };
+        showMe(f.lat, f.lng); resolve(f);
+      }, reject, { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 });
     });
   }
 
   $('btnLocate').onclick = async () => {
     try {
-      const pos = await locateOnce();
-      const { latitude, longitude, accuracy } = pos.coords;
-      showMe(latitude, longitude, accuracy);
-      map.flyTo([latitude, longitude], Math.max(map.getZoom(), 16));
+      const f = await currentFix();
+      map.flyTo({ center: [f.lng, f.lat], zoom: Math.max(map.getZoom(), 15.5) });
     } catch (e) { toast(geoError(e), 4000); }
   };
+
+  // ---------- 3D ----------
+  function set3d(on) {
+    state.threeD = on;
+    $('btn3d').textContent = on ? '2D' : '3D';
+    $('btn3d').setAttribute('aria-pressed', String(on));
+    if (map.getLayer('buildings-3d')) map.setLayoutProperty('buildings-3d', 'visibility', on ? 'visible' : 'none');
+    map.easeTo({ pitch: on ? 60 : 0, bearing: on ? -17 : 0, zoom: on ? Math.max(map.getZoom(), 15.5) : map.getZoom(), duration: 900 });
+    if (on && usingFallback) toast('3D buildings need the main map, which could not load right now.');
+  }
+  $('btn3d').onclick = () => set3d(!state.threeD);
 
   // ---------- recording a walk ----------
   function saveRecDraft() {
     try { localStorage.setItem(REC_KEY, JSON.stringify({ id: state.recording.id, startedAt: state.recording.startedAt, points: state.recording.points })); } catch (e) { /* storage full or blocked */ }
   }
   function clearRecDraft() { try { localStorage.removeItem(REC_KEY); } catch (e) { /* ignore */ } }
-
   async function requestWakeLock() {
     try { if ('wakeLock' in navigator) state.wakeLock = await navigator.wakeLock.request('screen'); } catch (e) { state.wakeLock = null; }
   }
@@ -334,61 +450,46 @@
 
   function updateRecBanner() {
     if (!state.recording) return;
-    const pts = state.recording.points;
-    $('recMeta').textContent = `${fmtDist(pathLength(pts))} · ${fmtDur(Date.now() - state.recording.startedAt)}`;
+    $('recMeta').textContent = `${fmtDist(pathLength(state.recording.points))} · ${fmtDur(Date.now() - state.recording.startedAt)}`;
   }
   let recTick = null;
-
-  function liveTrailPopup(latlng) {
-    const rec = state.recording; if (!rec) return;
-    const near = nearestPoint(rec.points, latlng); if (!near) return;
-    L.popup({ maxWidth: 260 }).setLatLng([near[0], near[1]])
-      .setContent(`<div class="pop"><div class="here-at">You were here at <b>${fmtClock(near[2])}</b></div><div class="when">Current trail · ${fmtDist(pathLength(rec.points))} so far</div></div>`)
-      .openOn(map);
-    markTrailPoint(near);
-  }
 
   function startRecording(resume, auto) {
     if (!('geolocation' in navigator)) { toast('This browser cannot read GPS.'); return; }
     if (!window.isSecureContext) { toast(geoError(), 4500); return; }
     state.recording = resume || { id: uid(), startedAt: Date.now(), points: [] };
-    const startPts = state.recording.points.map((p) => [p[0], p[1]]);
-    state.recLine = L.layerGroup([
-      L.polyline(startPts, { ...walkStyle(), opacity: 0.95, interactive: false }),
-      trailHitLine(startPts, liveTrailPopup),
-    ]).addTo(map);
+    setGeo('rec', fc(state.recording.points.length > 1 ? [line(state.recording.points)] : []));
     document.body.classList.add('recording');
-    $('btnRecLabel').textContent = 'Finish walk';
+    $('btnRecLabel').textContent = 'Finish';
     $('recBanner').hidden = false; $('recText').textContent = 'Recording';
     updateRecBanner(); recTick = setInterval(updateRecBanner, 1000);
     requestWakeLock();
     let first = true;
-    state.watchId = navigator.geolocation.watchPosition((pos) => {
-      const { latitude: lat, longitude: lng, accuracy } = pos.coords;
-      showMe(lat, lng, accuracy);
-      if (first) { first = false; map.setView([lat, lng], Math.max(map.getZoom(), 17)); }
-      if (accuracy > MAX_ACCURACY_M) { $('recText').textContent = 'Waiting for better GPS'; return; }
+    state.recUnsub = gps.subscribe((f) => {
+      if (!state.recording) return;
+      if (first) { first = false; if (!nav.active) map.easeTo({ center: [f.lng, f.lat], zoom: Math.max(map.getZoom(), 15.5) }); }
+      if (f.acc > MAX_ACCURACY_M) { $('recText').textContent = 'Waiting for better GPS'; return; }
       $('recText').textContent = 'Recording';
-      const pts = state.recording.points, p = [lat, lng, pos.timestamp];
-      if (pts.length && haversine(pts[pts.length - 1], p) < Math.max(MIN_STEP_M, Math.min(accuracy, 25))) return;
-      pts.push(p); state.recLine.eachLayer((l) => l.addLatLng([lat, lng])); saveRecDraft(); updateRecBanner();
-    }, (err) => { $('recText').textContent = 'GPS paused'; if (err.code === 1) { toast(geoError(err), 4500); stopRecording(false); } },
-    { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
+      const pts = state.recording.points, p = [f.lat, f.lng, f.t];
+      if (pts.length && haversine(pts[pts.length - 1], p) < Math.max(MIN_STEP_M, Math.min(f.acc, 25))) return;
+      pts.push(p);
+      if (pts.length > 1) setGeo('rec', fc([line(pts)]));
+      saveRecDraft(); updateRecBanner();
+    }, (err) => { $('recText').textContent = 'GPS paused'; if (err.code === 1) { toast(geoError(err), 4500); stopRecording(false); } });
     if (!resume && !auto) toast('Walk started. Keep the app open while you walk.', 3500);
   }
 
   // quiet: save without asking for a name (used for automatic trails).
   function stopRecording(save, quiet) {
-    if (state.watchId != null) navigator.geolocation.clearWatch(state.watchId);
-    state.watchId = null;
+    if (state.recUnsub) { state.recUnsub(); state.recUnsub = null; }
     clearInterval(recTick);
     if (state.wakeLock) { state.wakeLock.release().catch(() => {}); state.wakeLock = null; }
     document.body.classList.remove('recording');
     $('btnRecLabel').textContent = 'Start walk';
     $('recBanner').hidden = true;
-    if (state.recLine) { map.removeLayer(state.recLine); state.recLine = null; }
+    setGeo('rec', EMPTY);
     const rec = state.recording; state.recording = null;
-    if (!save || !rec) { clearRecDraft(); return; }
+    if (!save || !rec) { clearRecDraft(); return Promise.resolve(); }
     const dist = pathLength(rec.points);
     if (rec.points.length < 2 || (quiet && dist < AUTO_MIN_M)) {
       clearRecDraft(); if (!quiet) toast('Walk was too short to save.'); return Promise.resolve();
@@ -423,24 +524,24 @@
   }
 
   // ---------- drawing a walk by hand ----------
+  function redrawDraw() {
+    const pts = state.draw ? state.draw.points : [];
+    setGeo('draw', fc([...(pts.length > 1 ? [line(pts)] : []), ...pts.map((p) => point(p))]));
+  }
   function startDrawWalk() {
-    closeSheet(); map.closePopup();
+    closeSheet(); closePopup();
     setMode('drawWalk');
-    const d = state.draw = { points: [], line: L.polyline([], { ...walkStyle(), opacity: 0.95, dashArray: '2 10' }).addTo(map), vertices: L.layerGroup().addTo(map) };
+    state.draw = { points: [] };
     const refresh = () => {
+      const d = state.draw;
       showHint(d.points.length < 2 ? 'Tap along the streets you walked' : `${fmtDist(pathLength(d.points))} so far`, [
-        { label: 'Undo', onClick: () => { d.points.pop(); redraw(); } },
+        { label: 'Undo', onClick: () => { d.points.pop(); redrawDraw(); refresh(); } },
         { label: 'Cancel', onClick: cancelMode },
         { label: 'Save walk', primary: true, onClick: finishDrawWalk },
       ]);
     };
-    const redraw = () => {
-      d.line.setLatLngs(d.points); d.vertices.clearLayers();
-      d.points.forEach((p) => L.marker(p, { icon: L.divIcon({ className: '', html: '<div class="draw-vertex"></div>', iconSize: [12, 12] }), interactive: false }).addTo(d.vertices));
-      refresh();
-    };
-    d.redraw = redraw;
-    refresh();
+    state.draw.refresh = refresh;
+    redrawDraw(); refresh();
   }
   async function finishDrawWalk() {
     const d = state.draw;
@@ -452,40 +553,89 @@
     await store.put('walks', w); state.walks.push(w); renderAll();
     openWalkForm(w, false); $('sheetTitle').textContent = 'Name this walk';
   }
-
   function cancelMode() {
-    if (state.draw) { map.removeLayer(state.draw.line); map.removeLayer(state.draw.vertices); state.draw = null; }
+    state.draw = null; redrawDraw();
     setMode('idle');
   }
 
-  function handleMapTap(latlng) {
-    if (state.mode === 'drawWalk' && state.draw) { state.draw.points.push([latlng.lat, latlng.lng]); state.draw.redraw(); }
-    else if (state.mode === 'pickMemory') { setMode('idle'); openMemoryForm(null, latlng); }
+  function handleMapTap(pos) {
+    if (state.mode === 'drawWalk' && state.draw) { state.draw.points.push([pos.lat, pos.lng]); redrawDraw(); state.draw.refresh(); }
+    else if (state.mode === 'pickMemory') { setMode('idle'); openMemoryForm(null, pos); }
+    else if (state.mode === 'pickPin') { setMode('idle'); openPinForm(null, pos); }
   }
-  map.on('click', (e) => handleMapTap(e.latlng));
+
+  let suppressClick = false;
+  map.on('click', (e) => {
+    if (suppressClick) { suppressClick = false; return; }
+    if (state.mode !== 'idle') { handleMapTap(e.lngLat); return; }
+    const layers = ['rec-hit', 'walks-hit'].filter((id) => map.getLayer(id));
+    const box = [[e.point.x - 12, e.point.y - 12], [e.point.x + 12, e.point.y + 12]];
+    const hits = layers.length ? map.queryRenderedFeatures(box, { layers }) : [];
+    if (!hits.length) { closePopup(); return; }
+    if (hits[0].layer.id === 'rec-hit') { liveTrailPopup(e.lngLat); return; }
+    const w = state.walks.find((x) => x.id === hits[0].properties.id);
+    if (w) openWalkPopup(w, e.lngLat);
+  });
+
+  // Long-press (or right-click) anywhere: pin, memory or directions for that spot.
+  (function longPress() {
+    let timer = null, start = null, lastFired = 0;
+    const fire = (lngLat) => {
+      if (Date.now() - lastFired < 900 || state.mode !== 'idle') return;
+      lastFired = Date.now(); suppressClick = true; setTimeout(() => { suppressClick = false; }, 700);
+      spotMenu({ lat: lngLat.lat, lng: lngLat.lng });
+    };
+    const c = map.getCanvasContainer();
+    c.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 1) { clearTimeout(timer); return; }
+      const t = e.touches[0]; start = [t.clientX, t.clientY];
+      timer = setTimeout(() => {
+        const r = map.getContainer().getBoundingClientRect();
+        fire(map.unproject([start[0] - r.left, start[1] - r.top]));
+      }, 600);
+    }, { passive: true });
+    c.addEventListener('touchmove', (e) => {
+      const t = e.touches[0];
+      if (start && Math.hypot(t.clientX - start[0], t.clientY - start[1]) > 10) clearTimeout(timer);
+    }, { passive: true });
+    c.addEventListener('touchend', () => clearTimeout(timer));
+    c.addEventListener('touchcancel', () => clearTimeout(timer));
+    map.on('contextmenu', (e) => fire(e.lngLat));
+  })();
+
+  function spotMenu(pos) {
+    closePopup();
+    const node = h(`
+      <p class="note">${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)}</p>
+      <button class="btn btn-primary btn-block" type="button" id="spotPin">Drop a pin here</button>
+      <button class="btn btn-block" type="button" id="spotMemory">Add a memory here</button>
+      <button class="btn btn-block" type="button" id="spotGo">Walk here</button>`);
+    openSheet('This spot', node);
+    $('spotPin').onclick = () => openPinForm(null, pos);
+    $('spotMemory').onclick = () => openMemoryForm(null, pos);
+    $('spotGo').onclick = () => { closeSheet(); navigateTo({ lat: pos.lat, lng: pos.lng, name: 'the dropped spot' }); };
+  }
 
   // ---------- memories ----------
-  function startAddMemory() {
+  function chooseSpot(title, onHere, pickMode) {
     if (state.mode !== 'idle') cancelMode();
     const node = h(`
-      <p class="note">Where did it happen?</p>
-      <button class="btn btn-primary btn-block" type="button" id="memHere">Right here, where I am</button>
-      <button class="btn btn-block" type="button" id="memPick">Pick a spot on the map</button>`);
-    openSheet('New memory', node);
-    $('memHere').onclick = async () => {
-      $('memHere').textContent = 'Finding you…';
-      try {
-        const pos = await locateOnce();
-        const { latitude, longitude, accuracy } = pos.coords; showMe(latitude, longitude, accuracy);
-        openMemoryForm(null, L.latLng(latitude, longitude));
-      } catch (e) { toast(geoError(e), 4000); $('memHere').textContent = 'Right here, where I am'; }
+      <p class="note">Where is it?</p>
+      <button class="btn btn-primary btn-block" type="button" id="spotHere">Right here, where I am</button>
+      <button class="btn btn-block" type="button" id="spotPick">Pick a spot on the map</button>
+      <p class="note">Tip: press and hold anywhere on the map to drop a pin or memory there.</p>`);
+    openSheet(title, node);
+    $('spotHere').onclick = async () => {
+      $('spotHere').textContent = 'Finding you…';
+      try { const f = await currentFix(); onHere({ lat: f.lat, lng: f.lng }); }
+      catch (e) { toast(geoError(e), 4000); $('spotHere').textContent = 'Right here, where I am'; }
     };
-    $('memPick').onclick = () => {
-      closeSheet(); map.closePopup(); setMode('pickMemory');
+    $('spotPick').onclick = () => {
+      closeSheet(); closePopup(); setMode(pickMode);
       showHint('Tap the place on the map', [{ label: 'Cancel', onClick: cancelMode }]);
     };
   }
-  $('btnMemory').onclick = startAddMemory;
+  $('btnMemory').onclick = () => chooseSpot('New memory', (pos) => openMemoryForm(null, pos), 'pickMemory');
 
   function resizeImage(file, max = 1280, quality = 0.8) {
     return new Promise((resolve, reject) => {
@@ -501,56 +651,274 @@
     });
   }
 
-  function openMemoryForm(existing, latlng, title) {
-    const m = existing ? { ...existing } : { id: uid(), lat: latlng.lat, lng: latlng.lng, title: title || '', note: '', date: todayISO(), photo: null, createdAt: Date.now() };
+  async function saveMemory(m) {
+    const clean = { ...m }; delete clean._marker; delete clean.photo;
+    await store.put('memories', clean);
+    state.memories = state.memories.filter((x) => x.id !== clean.id).concat(clean);
+    renderAll();
+    return state.memories.find((x) => x.id === clean.id);
+  }
+
+  function openMemoryForm(existing, pos, title) {
+    const m = existing ? { ...existing, photos: photosOf(existing).slice() }
+      : { id: uid(), lat: pos.lat, lng: pos.lng, title: title || '', note: '', date: todayISO(), photos: [], createdAt: Date.now() };
     const node = h(`
       <div class="field"><label for="memTitle">What happened here</label><input type="text" id="memTitle" maxlength="100" placeholder="First swim at the boulevard"></div>
       <div class="field"><label for="memDate">When</label><input type="date" id="memDate"></div>
       <div class="field"><label for="memNote">Story</label><textarea id="memNote" placeholder="Who you were with, what you remember"></textarea></div>
-      <div class="field"><label for="memPhoto">Photo</label>
-        <div class="photo-pick"><img id="memPreview" alt="" hidden>
-          <input type="file" id="memPhoto" accept="image/*">
-          <button class="btn btn-sm" type="button" id="memPhotoRemove" hidden>Remove photo</button></div></div>
+      <div class="field"><label for="memPhoto">Photos</label>
+        <div class="photo-pick" id="memPhotos"></div>
+        <input type="file" id="memPhoto" accept="image/*" multiple></div>
       <div class="where">${m.lat.toFixed(5)}, ${m.lng.toFixed(5)}</div>
       <div class="form-actions"><button class="btn" type="button" id="memCancel">Cancel</button>
       <button class="btn btn-primary" type="button" id="memSave">${existing ? 'Save changes' : 'Save memory'}</button></div>`);
     openSheet(existing ? 'Edit memory' : 'New memory', node);
     $('memTitle').value = m.title; $('memDate').value = m.date || ''; $('memNote').value = m.note || '';
-    const showPhoto = () => { $('memPreview').hidden = !m.photo; $('memPhotoRemove').hidden = !m.photo; if (m.photo) $('memPreview').src = m.photo; };
-    showPhoto();
-    $('memPhoto').onchange = async (e) => {
-      const f = e.target.files && e.target.files[0]; if (!f) return;
-      try { m.photo = await resizeImage(f); showPhoto(); } catch (err) { toast(err.message); }
+    const showPhotos = () => {
+      const box = $('memPhotos'); box.innerHTML = '';
+      m.photos.forEach((src, i) => {
+        const wrap = document.createElement('div'); wrap.className = 'thumb-wrap';
+        wrap.innerHTML = `<img src="${src}" alt=""><button type="button" class="thumb-x" aria-label="Remove photo">×</button>`;
+        wrap.querySelector('button').onclick = () => { m.photos.splice(i, 1); showPhotos(); };
+        box.appendChild(wrap);
+      });
     };
-    $('memPhotoRemove').onclick = () => { m.photo = null; $('memPhoto').value = ''; showPhoto(); };
+    showPhotos();
+    $('memPhoto').onchange = async (e) => {
+      for (const f of Array.from(e.target.files || [])) {
+        try { m.photos.push(await resizeImage(f)); } catch (err) { toast(err.message); }
+      }
+      e.target.value = ''; showPhotos();
+    };
     $('memCancel').onclick = closeSheet;
     $('memSave').onclick = async () => {
       m.title = $('memTitle').value.trim();
       if (!m.title) { $('memTitle').focus(); toast('Give the memory a short title.'); return; }
       m.date = $('memDate').value; m.note = $('memNote').value.trim();
-      const clean = { ...m }; delete clean._marker;
-      await store.put('memories', clean);
-      state.memories = state.memories.filter((x) => x.id !== clean.id).concat(clean);
-      closeSheet(); renderAll(); toast(existing ? 'Memory updated' : 'Memory saved');
-      const mk = state.memories.find((x) => x.id === clean.id)._marker;
-      map.panTo([clean.lat, clean.lng]); if (mk) mk.openPopup();
+      const saved = await saveMemory(m);
+      closeSheet(); toast(existing ? 'Memory updated' : 'Memory saved');
+      map.easeTo({ center: [saved.lng, saved.lat] });
+      setTimeout(() => openMemoryPopup(saved), 350);
     };
   }
+
+  // ---------- photo button ----------
+  $('btnPhoto').onclick = () => {
+    if (state.mode !== 'idle') cancelMode();
+    $('cameraInput').click();
+  };
+  $('cameraInput').onchange = async (e) => {
+    const file = e.target.files && e.target.files[0]; e.target.value = '';
+    if (!file) return;
+    toast('Saving photo…', 6000);
+    let photo, f;
+    try { photo = await resizeImage(file); } catch (err) { toast(err.message); return; }
+    try { f = await currentFix(); } catch (err) { toast('Photo kept, but I could not find where you are. ' + geoError(err), 5000); return pickSpotForPhoto(photo); }
+    await attachPhoto(photo, { lat: f.lat, lng: f.lng });
+  };
+
+  // A photo joins the memory you're standing at, or starts a new one named after the nearest place.
+  async function attachPhoto(photo, pos) {
+    let best = null, bestD = Infinity;
+    for (const m of state.memories) { const d = haversine([pos.lat, pos.lng], [m.lat, m.lng]); if (d < bestD) { bestD = d; best = m; } }
+    let m;
+    if (best && bestD <= PHOTO_JOIN_M) {
+      m = { ...best, photos: photosOf(best).concat(photo) };
+      m = await saveMemory(m);
+      toast(`Photo added to “${m.title}”`);
+    } else {
+      const placeNear = places ? places.near(pos.lat, pos.lng, 40)[0] : null;
+      m = await saveMemory({ id: uid(), lat: pos.lat, lng: pos.lng, title: placeNear ? placeNear.name : 'Photo at ' + fmtTime(Date.now()),
+        note: '', date: todayISO(), photos: [photo], createdAt: Date.now() });
+      toast('Photo saved as a new memory here');
+    }
+    map.easeTo({ center: [m.lng, m.lat], zoom: Math.max(map.getZoom(), 15.5) });
+    setTimeout(() => openMemoryPopup(m), 400);
+  }
+  function pickSpotForPhoto(photo) {
+    closeSheet(); setMode('pickPhoto');
+    showHint('Tap where you took the photo', [{ label: 'Cancel', onClick: cancelMode }]);
+    const once = (e) => { if (state.mode !== 'pickPhoto') return; map.off('click', once); setMode('idle'); attachPhoto(photo, e.lngLat); };
+    map.on('click', once);
+  }
+
+  // ---------- pins ----------
+  $('btnPin').onclick = () => chooseSpot('New pin', (pos) => openPinForm(null, pos), 'pickPin');
+
+  function openPinForm(existing, pos) {
+    const p = existing ? { ...existing } : { id: uid(), lat: pos.lat, lng: pos.lng, name: '', note: '', color: PIN_COLORS[0], createdAt: Date.now() };
+    const node = h(`
+      <div class="field"><label for="pinName">Name</label><input type="text" id="pinName" maxlength="80" placeholder="Best khachapuri"></div>
+      <div class="field"><label>Colour</label><div class="swatches" id="pinColors" role="radiogroup">${PIN_COLORS.map((c) =>
+        `<button type="button" class="swatch" role="radio" data-c="${c}" style="--c:${c}" aria-label="Colour ${c}" aria-checked="${c === p.color}"></button>`).join('')}</div></div>
+      <div class="field"><label for="pinNote">Note</label><textarea id="pinNote" placeholder="Why you pinned it"></textarea></div>
+      <div class="form-actions"><button class="btn" type="button" id="pinCancel">Cancel</button>
+      <button class="btn btn-primary" type="button" id="pinSave">${existing ? 'Save changes' : 'Save pin'}</button></div>`);
+    openSheet(existing ? 'Edit pin' : 'New pin', node);
+    $('pinName').value = p.name; $('pinNote').value = p.note || '';
+    $('pinColors').onclick = (e) => {
+      const b = e.target.closest('.swatch'); if (!b) return;
+      p.color = b.dataset.c;
+      $('pinColors').querySelectorAll('.swatch').forEach((x) => x.setAttribute('aria-checked', String(x === b)));
+    };
+    $('pinCancel').onclick = closeSheet;
+    $('pinSave').onclick = async () => {
+      p.name = $('pinName').value.trim() || 'Pin';
+      p.note = $('pinNote').value.trim();
+      const clean = { ...p }; delete clean._marker;
+      await store.put('pins', clean);
+      state.pins = state.pins.filter((x) => x.id !== clean.id).concat(clean);
+      closeSheet(); renderAll(); toast(existing ? 'Pin updated' : 'Pin dropped');
+    };
+  }
+
+  function openPinPopup(p) {
+    const html = `<div class="pop"><div class="cat" style="color:${p.color}">Pin</div><h3>${esc(p.name)}</h3>
+      ${p.note ? `<p>${esc(p.note)}</p>` : ''}
+      <div class="row"><button class="btn btn-sm btn-primary" data-act="go">Walk there</button>
+      <button class="btn btn-sm" data-act="edit">Edit</button>
+      <button class="btn btn-sm btn-danger" data-act="delete">Delete</button></div></div>`;
+    openPopup([p.lng, p.lat], html, (el) => {
+      el.querySelector('[data-act="go"]').onclick = () => navigateTo({ lat: p.lat, lng: p.lng, name: p.name });
+      el.querySelector('[data-act="edit"]').onclick = () => { closePopup(); openPinForm(p); };
+      armDelete(el.querySelector('[data-act="delete"]'), async () => {
+        await store.del('pins', p.id);
+        state.pins = state.pins.filter((x) => x.id !== p.id);
+        closePopup(); renderAll(); toast('Pin deleted');
+      });
+    }, { offset: 34 });
+  }
+
+  // ---------- walking directions inside the app ----------
+  const nav = { active: null };
+
+  const STEP_WORDS = { left: 'left', right: 'right', 'slight left': 'slightly left', 'slight right': 'slightly right', 'sharp left': 'sharp left', 'sharp right': 'sharp right', straight: 'straight', uturn: 'around' };
+  function stepText(s) {
+    const m = s.maneuver || {}, on = s.name ? ` onto ${s.name}` : '', dir = STEP_WORDS[m.modifier] || '';
+    if (m.type === 'arrive') return 'Arrive at your destination';
+    if (m.type === 'depart') return `Head off${s.name ? ' along ' + s.name : ''}`;
+    if (m.type === 'roundabout' || m.type === 'rotary') return `Go around the roundabout${on}`;
+    if (dir === 'straight') return `Keep straight${on}`;
+    if (dir) return `Turn ${dir}${on}`;
+    return `Continue${on}`;
+  }
+
+  async function fetchRoute(from, to) {
+    const url = `${ROUTER}${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=geojson&steps=true`;
+    const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), 15000);
+    try {
+      const res = await fetch(url, { signal: ctrl.signal });
+      const data = await res.json();
+      if (!res.ok || data.code !== 'Ok' || !data.routes || !data.routes.length) throw new Error('no route');
+      const r = data.routes[0];
+      const coords = r.geometry.coordinates.map((c) => [c[1], c[0]]);
+      const steps = [];
+      for (const leg of r.legs || []) for (const s of leg.steps || []) {
+        const loc = s.maneuver && s.maneuver.location;
+        if (loc) steps.push({ at: [loc[1], loc[0]], text: stepText(s) });
+      }
+      return { coords, distance: r.distance, duration: r.duration, steps, exact: true };
+    } catch (e) {
+      // No route service: fall back to a straight line so you still get a direction and distance.
+      const coords = [[from.lat, from.lng], [to.lat, to.lng]], d = haversine(coords[0], coords[1]);
+      return { coords, distance: d, duration: d / 1.3, steps: [], exact: false };
+    } finally { clearTimeout(timer); }
+  }
+
+  function nearestIndex(coords, p) {
+    let best = 0, bestD = Infinity;
+    for (let i = 0; i < coords.length; i++) { const d = haversine(coords[i], p); if (d < bestD) { bestD = d; best = i; } }
+    return { i: best, d: bestD };
+  }
+
+  function navPanel(title, line1, line2) {
+    $('navTitle').textContent = title; $('navMain').textContent = line1; $('navNext').textContent = line2 || '';
+    $('navNext').hidden = !line2;
+    $('navPanel').hidden = false;
+    document.body.classList.add('navigating');
+  }
+  function googleLink(dest) { return `https://www.google.com/maps/dir/?api=1&travelmode=walking&destination=${dest.lat},${dest.lng}`; }
+
+  async function navigateTo(dest) {
+    closePopup(); closeSheet(); if (state.mode !== 'idle') cancelMode();
+    endNav(true);
+    nav.active = { dest, route: null, lastReroute: 0, arrived: false };
+    $('navGoogle').href = googleLink(dest);
+    navPanel('Walking to ' + dest.name, 'Finding a walking route…');
+    let from;
+    try { from = await currentFix(); } catch (e) { toast(geoError(e), 4500); endNav(); return; }
+    if (!nav.active || nav.active.dest !== dest) return;
+    await planRoute(from, true);
+    nav.active.unsub = gps.subscribe(onNavFix);
+  }
+
+  async function planRoute(from, fit) {
+    const a = nav.active; if (!a) return;
+    a.lastReroute = Date.now();
+    const r = await fetchRoute(from, a.dest);
+    if (nav.active !== a) return;
+    a.route = r; a.speed = r.duration > 0 ? r.distance / r.duration : 1.3;
+    a.stepIdx = r.steps.map((s) => nearestIndex(r.coords, s.at).i);
+    setGeo('route', fc([line(r.coords)]));
+    if (fit) {
+      const b = new maplibregl.LngLatBounds(ll(r.coords[0]), ll(r.coords[0]));
+      r.coords.forEach((c) => b.extend(ll(c)));
+      map.fitBounds(b, { padding: { top: 180, bottom: 230, left: 50, right: 50 }, maxZoom: 16.5, duration: 800 });
+    }
+    updateNav(from);
+  }
+
+  function updateNav(f) {
+    const a = nav.active; if (!a || !a.route) return;
+    const r = a.route, here = [f.lat, f.lng];
+    const toDest = haversine(here, [a.dest.lat, a.dest.lng]);
+    if (toDest < 25) {
+      if (!a.arrived) {
+        a.arrived = true;
+        const p = a.dest.placeId && places ? places.markVisited(a.dest.placeId) : null;
+        toast(p ? `You arrived at ${a.dest.name}. Marked as visited.` : 'You have arrived.', 4000);
+      }
+      navPanel(a.dest.name, 'You have arrived', '');
+      return;
+    }
+    const n = nearestIndex(r.coords, here);
+    let remaining = n.d;
+    for (let i = n.i; i < r.coords.length - 1; i++) remaining += haversine(r.coords[i], r.coords[i + 1]);
+    const k = a.stepIdx.findIndex((idx) => idx > n.i);
+    const next = k >= 0 ? `Next: ${r.steps[k].text}` : (r.exact ? '' : 'No street route available, so this is a straight line.');
+    navPanel('Walking to ' + a.dest.name, `${fmtMinutes(remaining / a.speed)} · ${fmtDist(remaining)}`, next);
+    // Wandered off the route: plan a new one (at most every 20 seconds).
+    if (r.exact && n.d > 50 && Date.now() - a.lastReroute > 20000) planRoute(f, false);
+  }
+  function onNavFix(f) { updateNav(f); }
+
+  function endNav(silent) {
+    const a = nav.active; nav.active = null;
+    if (a && a.unsub) a.unsub();
+    setGeo('route', EMPTY);
+    $('navPanel').hidden = true;
+    document.body.classList.remove('navigating');
+    if (a && !silent) toast('Directions ended');
+  }
+  $('navEnd').onclick = () => endNav();
 
   // ---------- "My map" sheet ----------
   let listTab = 'memories';
   function openList() {
     if (state.mode !== 'idle') cancelMode();
     const km = state.walks.reduce((s, w) => s + (w.distance || 0), 0);
+    const visitedCount = places ? places.visitedList().length : 0;
     const node = h(`
       <div class="summary">
         <div><b>${fmtDist(km)}</b><span>walked</span></div>
-        <div><b>${state.walks.length}</b><span>${state.walks.length === 1 ? 'walk' : 'walks'}</span></div>
         <div><b>${state.memories.length}</b><span>${state.memories.length === 1 ? 'memory' : 'memories'}</span></div>
+        <div><b>${visitedCount}</b><span>places visited</span></div>
       </div>
       <div class="tabs" role="tablist">
-        <button role="tab" type="button" id="tabMem" aria-selected="${listTab === 'memories'}">Memories</button>
-        <button role="tab" type="button" id="tabWalk" aria-selected="${listTab === 'walks'}">Walks</button>
+        <button role="tab" type="button" data-tab="memories">Memories</button>
+        <button role="tab" type="button" data-tab="walks">Walks</button>
+        <button role="tab" type="button" data-tab="pins">Pins</button>
+        <button role="tab" type="button" data-tab="visited">Visited</button>
       </div>
       <ul class="list" id="listItems"></ul>
       <label class="switch-row" for="autoRec"><span><b>Record my trail whenever the app is open</b>
@@ -565,38 +933,51 @@
       </div>
       <p class="note">Everything is kept on this phone only. Save a backup now and then so nothing is lost if the phone or browser is reset.</p>`);
     openSheet('My Batumi', node);
+    const go = (lat, lng, then) => { closeSheet(); map.flyTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 15.5) }); setTimeout(then, 800); };
+    const EMPTY_TEXT = {
+      memories: 'No memories yet. Tap Memory or Photo to save the first place that means something.',
+      walks: 'No walks yet. Tap Start walk when you head out, or draw a past walk below.',
+      pins: 'No pins yet. Tap Pin, or press and hold anywhere on the map.',
+      visited: 'No places marked visited yet. Open a place and tap Mark visited, or walk there with directions.',
+    };
     const fill = () => {
-      $('tabMem').setAttribute('aria-selected', listTab === 'memories'); $('tabWalk').setAttribute('aria-selected', listTab === 'walks');
+      node.querySelectorAll('[data-tab]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === listTab)));
       const ul = $('listItems'); ul.innerHTML = '';
-      const items = listTab === 'memories'
-        ? state.memories.slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''))
-        : state.walks.slice().sort((a, b) => b.startedAt - a.startedAt);
-      if (!items.length) {
-        ul.innerHTML = `<li class="empty" style="cursor:default">${listTab === 'memories'
-          ? 'No memories yet. Tap Memory to pin the first place that means something.'
-          : 'No walks yet. Tap Start walk when you head out, or draw a past walk below.'}</li>`;
-        return;
-      }
+      let items;
+      if (listTab === 'memories') items = state.memories.slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      else if (listTab === 'walks') items = state.walks.slice().sort((a, b) => b.startedAt - a.startedAt);
+      else if (listTab === 'pins') items = state.pins.slice().sort((a, b) => b.createdAt - a.createdAt);
+      else items = places ? places.visitedList() : [];
+      if (!items.length) { ul.innerHTML = `<li class="empty" style="cursor:default">${EMPTY_TEXT[listTab]}</li>`; return; }
       for (const it of items) {
         const li = document.createElement('li');
         if (listTab === 'memories') {
-          li.innerHTML = `${it.photo ? `<img class="thumb" src="${it.photo}" alt="">` : '<span class="thumb"><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.4-7 10-7 10z"/></svg></span>'}
-            <div class="txt"><div class="t">${esc(it.title)}</div><div class="s">${it.date ? fmtDate(it.date) : ''}</div></div>`;
-          li.onclick = () => { closeSheet(); map.flyTo([it.lat, it.lng], 17); setTimeout(() => it._marker && it._marker.openPopup(), 700); };
-        } else {
+          const ph = photosOf(it)[0];
+          li.innerHTML = `${ph ? `<img class="thumb" src="${ph}" alt="">` : '<span class="thumb"><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.4-7 10-7 10z"/></svg></span>'}
+            <div class="txt"><div class="t">${esc(it.title)}</div><div class="s">${it.date ? fmtDate(it.date) : ''}${photosOf(it).length > 1 ? ` · ${photosOf(it).length} photos` : ''}</div></div>`;
+          li.onclick = () => go(it.lat, it.lng, () => openMemoryPopup(it));
+        } else if (listTab === 'walks') {
           li.innerHTML = `<span class="walk-sw"></span><div class="txt"><div class="t">${esc(it.name)}</div>
             <div class="s">${fmtDate(it.startedAt)} · ${fmtDist(it.distance)}</div></div>`;
           li.onclick = () => {
-            closeSheet(); const b = L.latLngBounds(it.points.map((p) => [p[0], p[1]]));
-            map.flyToBounds(b, { padding: [40, 40], maxZoom: 17 });
-            setTimeout(() => openWalkPopup(it, b.getCenter()), 800);
+            closeSheet();
+            const b = new maplibregl.LngLatBounds(ll(it.points[0]), ll(it.points[0]));
+            it.points.forEach((p) => b.extend(ll(p)));
+            map.fitBounds(b, { padding: { top: 180, bottom: 120, left: 40, right: 40 }, maxZoom: 16 });
+            const mid = it.points[Math.floor(it.points.length / 2)];
+            setTimeout(() => openWalkPopup(it, ll(mid)), 900);
           };
+        } else if (listTab === 'pins') {
+          li.innerHTML = `<span class="pin-sw" style="--c:${it.color}"></span><div class="txt"><div class="t">${esc(it.name)}</div><div class="s">${esc(it.note || '')}</div></div>`;
+          li.onclick = () => go(it.lat, it.lng, () => openPinPopup(it));
+        } else {
+          li.innerHTML = `<span class="pin-sw visited-sw"></span><div class="txt"><div class="t">${esc(it.p.name)}</div><div class="s">Visited ${fmtDate(it.at)}</div></div>`;
+          li.onclick = () => go(it.p.lat, it.p.lng, () => places.open(it.p));
         }
         ul.appendChild(li);
       }
     };
-    $('tabMem').onclick = () => { listTab = 'memories'; fill(); };
-    $('tabWalk').onclick = () => { listTab = 'walks'; fill(); };
+    node.querySelectorAll('[data-tab]').forEach((b) => { b.onclick = () => { listTab = b.dataset.tab; fill(); }; });
     $('autoRec').checked = autoOn();
     $('autoRec').onchange = (e) => {
       try { localStorage.setItem(AUTO_KEY, e.target.checked ? 'on' : 'off'); } catch (err) { /* ignore */ }
@@ -612,16 +993,21 @@
 
   function fitAll() {
     const pts = [];
-    state.walks.forEach((w) => w.points.forEach((p) => pts.push([p[0], p[1]])));
-    state.memories.forEach((m) => pts.push([m.lat, m.lng]));
-    if (pts.length) map.flyToBounds(L.latLngBounds(pts), { padding: [50, 50], maxZoom: 17 });
-    else map.flyTo(BATUMI, 15);
+    state.walks.forEach((w) => w.points.forEach((p) => pts.push(ll(p))));
+    state.memories.forEach((m) => pts.push([m.lng, m.lat]));
+    state.pins.forEach((p) => pts.push([p.lng, p.lat]));
+    if (!pts.length) { map.flyTo({ center: ll(BATUMI), zoom: 14 }); return; }
+    const b = new maplibregl.LngLatBounds(pts[0], pts[0]);
+    pts.forEach((p) => b.extend(p));
+    map.fitBounds(b, { padding: { top: 180, bottom: 120, left: 50, right: 50 }, maxZoom: 16 });
   }
 
   // ---------- backup ----------
   function exportBackup() {
     const strip = (o) => { const c = { ...o }; delete c._marker; return c; };
-    const data = { app: 'niniko-map', version: 1, exportedAt: new Date().toISOString(), walks: state.walks.map(strip), memories: state.memories.map(strip) };
+    const data = { app: 'niniko-map', version: 2, exportedAt: new Date().toISOString(),
+      walks: state.walks.map(strip), memories: state.memories.map(strip), pins: state.pins.map(strip),
+      visited: places ? places.exportVisited() : {} };
     const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = `batumi-map-backup-${todayISO()}.json`;
@@ -636,8 +1022,8 @@
       const data = JSON.parse(await f.text());
       if (data.app !== 'niniko-map') throw new Error('bad file');
       let n = 0;
-      for (const w of data.walks || []) { await store.put('walks', w); n++; }
-      for (const m of data.memories || []) { await store.put('memories', m); n++; }
+      for (const name of STORES) for (const x of data[name] || []) { await store.put(name, x); n++; }
+      if (data.visited && places) places.importVisited(data.visited);
       await load(); closeSheet(); fitAll(); toast(`Restored ${n} items`);
     } catch (err) { toast('That file is not a backup from this app.'); }
   };
@@ -646,6 +1032,7 @@
   async function load() {
     state.walks = (await store.all('walks')) || [];
     state.memories = (await store.all('memories')) || [];
+    state.pins = (await store.all('pins')) || [];
     renderAll();
   }
 
@@ -675,10 +1062,14 @@
     startRecording(null, true);
   }
 
-  NinikoPlaces.init(map, { onAddMemory: (latlng, name) => openMemoryForm(null, latlng, name), toast });
+  const places = NinikoPlaces.init(map, {
+    marker, openPopup, closePopup, toast,
+    onAddMemory: (pos, name) => openMemoryForm(null, pos, name),
+    onDirections: (dest) => navigateTo(dest),
+  });
 
   load().then(() => {
-    if (state.walks.length || state.memories.length) fitAll();
+    if (state.walks.length || state.memories.length || state.pins.length) fitAll();
     if (window.isSecureContext && 'geolocation' in navigator) startTrail(); else offerResume();
   });
 
