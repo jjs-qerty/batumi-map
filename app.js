@@ -36,6 +36,8 @@
     const d = typeof isoOrMs === 'number' ? new Date(isoOrMs) : new Date(isoOrMs + 'T12:00:00');
     return d.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' });
   }
+  // Memories hold a list of photos; older ones saved a single "photo".
+  const photosOf = (m) => (m.photos && m.photos.length ? m.photos : (m.photo ? [m.photo] : []));
   function fmtTime(ms) { return new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }); }
 
   let toastTimer;
@@ -93,12 +95,38 @@
   // Keep popups clear of the title, filter chips and bottom toolbar when they open.
   L.Popup.mergeOptions({ autoPanPaddingTopLeft: L.point(12, 170), autoPanPaddingBottomRight: L.point(12, 110) });
   const map = L.map('map', { zoomControl: false, attributionControl: true }).setView(BATUMI, 15);
-  // OpenStreetMap tiles (free, no key). app.css softens their colours, and darkens them in dark mode.
+  // Free map styles that need no key. "Bright" is the plain OpenStreetMap map in full colour.
+  const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+  const BASEMAPS = {
+    bright: { name: 'Bright', note: 'Full-colour OpenStreetMap: green parks, blue sea, clear streets.',
+      url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', maxZoom: 19, cls: 'tiles-bright', attribution: OSM_ATTR },
+    colourful: { name: 'Colourful', note: 'OpenStreetMap France style: warmer colours and more shop and café icons.',
+      url: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png', subdomains: 'abc', maxZoom: 20, cls: 'tiles-bright',
+      attribution: OSM_ATTR + ', tiles by <a href="https://www.openstreetmap.fr" target="_blank" rel="noopener">OSM France</a>' },
+    soft: { name: 'Soft', note: 'The earlier calm look with faded colours.',
+      url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', maxZoom: 19, cls: 'tiles-soft', attribution: OSM_ATTR },
+  };
+  const BASEMAP_KEY = 'niniko.basemap';
+  let baseKey = 'bright', baseLayer = null;
+  try { if (BASEMAPS[localStorage.getItem(BASEMAP_KEY)]) baseKey = localStorage.getItem(BASEMAP_KEY); } catch (e) { /* ignore */ }
+  function setBasemap(key) {
+    const b = BASEMAPS[key] || BASEMAPS.bright;
+    if (baseLayer) map.removeLayer(baseLayer);
+    baseKey = key;
+    baseLayer = L.tileLayer(b.url, { maxZoom: b.maxZoom, subdomains: b.subdomains || 'abc', className: b.cls, attribution: b.attribution }).addTo(map);
+    // If a style's tile server isn't answering, go back to the plain OpenStreetMap map by itself.
+    if (key !== 'bright' && key !== 'soft') {
+      let ok = 0, bad = 0;
+      const layer = baseLayer;
+      layer.on('tileload', () => { ok++; });
+      layer.on('tileerror', () => {
+        if (++bad >= 4 && ok === 0 && baseLayer === layer) { setBasemap('bright'); toast(`The ${b.name} map isn't loading right now, so I switched back to Bright.`, 4500); }
+      });
+    }
+    try { localStorage.setItem(BASEMAP_KEY, baseKey); } catch (e) { /* ignore */ }
+  }
+  setBasemap(baseKey);
   const darkQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19, className: 'base-tiles',
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-  }).addTo(map);
   if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change', () => renderAll());
 
   const walkColor = () => getComputedStyle(document.documentElement).getPropertyValue('--walk').trim() || '#e8456b';
@@ -122,7 +150,8 @@
 
   // ---------- rendering ----------
   function renderStats() {
-    const km = state.walks.reduce((s, w) => s + (w.distance || 0), 0);
+    let km = state.walks.reduce((s, w) => s + (w.distance || 0), 0);
+    if (state.recording) km += pathLength(state.recording.points); // count the walk in progress too
     $('stats').innerHTML = `<span class="sw" style="background:${walkColor()}"></span><b>${fmtDist(km)}</b> walked · <b>${state.memories.length}</b> ${state.memories.length === 1 ? 'memory' : 'memories'}`;
   }
 
@@ -136,10 +165,10 @@
   }
 
   function memoryIcon(m) {
-    const style = m.photo ? ` style="background-image:url('${m.photo}')"` : '';
+    const ph = photosOf(m)[0], style = ph ? ` style="background-image:url('${ph}')"` : '';
     return L.divIcon({
       className: '',
-      html: `<div class="pin${m.photo ? ' has-photo' : ''}"${style}><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.4-7 10-7 10z"/></svg></div>`,
+      html: `<div class="pin${ph ? ' has-photo' : ''}"${style}><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.4-7 10-7 10z"/></svg></div>`,
       iconSize: [34, 34], iconAnchor: [17, 40], popupAnchor: [0, -38],
     });
   }
@@ -228,14 +257,21 @@
   function memoryPopupHtml(m) {
     return `<div class="pop"><h3>${esc(m.title)}</h3>
       <div class="when">${m.date ? fmtDate(m.date) : ''}</div>
-      ${m.photo ? `<img src="${m.photo}" alt="">` : ''}
+      ${galleryHtml(photosOf(m))}
       ${m.note ? `<p>${esc(m.note)}</p>` : ''}
       <div class="row"><button class="btn btn-sm" data-act="edit">Edit</button>
+      <button class="btn btn-sm" data-act="photo">+ Photo</button>
       <button class="btn btn-sm btn-danger" data-act="delete">Delete</button></div></div>`;
+  }
+  function galleryHtml(list) {
+    if (!list.length) return '';
+    if (list.length === 1) return `<img src="${list[0]}" alt="">`;
+    return `<div class="gallery">${list.map((src) => `<img src="${src}" alt="">`).join('')}</div><div class="when">${list.length} photos · swipe to see them all</div>`;
   }
   function wireMemoryPopup(popup, m) {
     const el = popup.getElement();
     el.querySelector('[data-act="edit"]').onclick = () => { map.closePopup(); openMemoryForm(m); };
+    el.querySelector('[data-act="photo"]').onclick = () => { map.closePopup(); takePhotoFor(m); };
     armDelete(el.querySelector('[data-act="delete"]'), async () => {
       await store.del('memories', m.id);
       state.memories = state.memories.filter((x) => x.id !== m.id);
@@ -281,7 +317,9 @@
   }
 
   // ---------- location ----------
+  let lastFix = null; // newest GPS position seen, so the photo button doesn't have to wait for a new one
   function showMe(lat, lng, acc) {
+    lastFix = { lat, lng, acc, at: Date.now() };
     if (!meMarker) {
       meMarker = L.marker([lat, lng], { icon: L.divIcon({ className: '', html: '<div class="me-dot"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }), interactive: false, zIndexOffset: 1000 }).addTo(map);
       meCircle = L.circle([lat, lng], { radius: acc || 0, color: '#2f7cf6', weight: 1, opacity: 0.4, fillOpacity: 0.08, interactive: false }).addTo(map);
@@ -338,6 +376,7 @@
     if (!state.recording) return;
     const pts = state.recording.points;
     $('recMeta').textContent = `${fmtDist(pathLength(pts))} · ${fmtDur(Date.now() - state.recording.startedAt)}`;
+    renderStats();
   }
   let recTick = null;
 
@@ -456,6 +495,7 @@
   }
 
   function cancelMode() {
+    state.pendingPhotos = null;
     if (state.draw) { map.removeLayer(state.draw.line); map.removeLayer(state.draw.vertices); state.draw = null; }
     setMode('idle');
   }
@@ -463,6 +503,7 @@
   function handleMapTap(latlng) {
     if (state.mode === 'drawWalk' && state.draw) { state.draw.points.push([latlng.lat, latlng.lng]); state.draw.redraw(); }
     else if (state.mode === 'pickMemory') { setMode('idle'); openMemoryForm(null, latlng); }
+    else if (state.mode === 'pickPhoto' && state.pendingPhotos) { const ph = state.pendingPhotos; state.pendingPhotos = null; setMode('idle'); attachPhotos(ph, latlng.lat, latlng.lng); }
   }
   map.on('click', (e) => handleMapTap(e.latlng));
 
@@ -504,33 +545,43 @@
   }
 
   function openMemoryForm(existing, latlng, title) {
-    const m = existing ? { ...existing } : { id: uid(), lat: latlng.lat, lng: latlng.lng, title: title || '', note: '', date: todayISO(), photo: null, createdAt: Date.now() };
+    const m = existing ? { ...existing } : { id: uid(), lat: latlng.lat, lng: latlng.lng, title: title || '', note: '', date: todayISO(), createdAt: Date.now() };
+    m.photos = photosOf(m).slice();
     const node = h(`
       <div class="field"><label for="memTitle">What happened here</label><input type="text" id="memTitle" maxlength="100" placeholder="First swim at the boulevard"></div>
       <div class="field"><label for="memDate">When</label><input type="date" id="memDate"></div>
       <div class="field"><label for="memNote">Story</label><textarea id="memNote" placeholder="Who you were with, what you remember"></textarea></div>
-      <div class="field"><label for="memPhoto">Photo</label>
-        <div class="photo-pick"><img id="memPreview" alt="" hidden>
-          <input type="file" id="memPhoto" accept="image/*">
-          <button class="btn btn-sm" type="button" id="memPhotoRemove" hidden>Remove photo</button></div></div>
+      <div class="field"><label for="memPhoto">Photos</label>
+        <div class="thumbs" id="memThumbs"></div>
+        <input type="file" id="memPhoto" accept="image/*" multiple></div>
       <div class="where">${m.lat.toFixed(5)}, ${m.lng.toFixed(5)}</div>
       <div class="form-actions"><button class="btn" type="button" id="memCancel">Cancel</button>
       <button class="btn btn-primary" type="button" id="memSave">${existing ? 'Save changes' : 'Save memory'}</button></div>`);
     openSheet(existing ? 'Edit memory' : 'New memory', node);
     $('memTitle').value = m.title; $('memDate').value = m.date || ''; $('memNote').value = m.note || '';
-    const showPhoto = () => { $('memPreview').hidden = !m.photo; $('memPhotoRemove').hidden = !m.photo; if (m.photo) $('memPreview').src = m.photo; };
-    showPhoto();
-    $('memPhoto').onchange = async (e) => {
-      const f = e.target.files && e.target.files[0]; if (!f) return;
-      try { m.photo = await resizeImage(f); showPhoto(); } catch (err) { toast(err.message); }
+    const showPhotos = () => {
+      const box = $('memThumbs'); box.innerHTML = '';
+      m.photos.forEach((src, i) => {
+        const d = document.createElement('div'); d.className = 'thumb-wrap';
+        d.innerHTML = `<img src="${src}" alt=""><button type="button" aria-label="Remove this photo">×</button>`;
+        d.querySelector('button').onclick = () => { m.photos.splice(i, 1); showPhotos(); };
+        box.appendChild(d);
+      });
     };
-    $('memPhotoRemove').onclick = () => { m.photo = null; $('memPhoto').value = ''; showPhoto(); };
+    showPhotos();
+    $('memPhoto').onchange = async (e) => {
+      for (const f of Array.from(e.target.files || [])) {
+        try { m.photos.push(await resizeImage(f)); } catch (err) { toast(err.message); }
+      }
+      e.target.value = ''; showPhotos();
+    };
     $('memCancel').onclick = closeSheet;
     $('memSave').onclick = async () => {
       m.title = $('memTitle').value.trim();
       if (!m.title) { $('memTitle').focus(); toast('Give the memory a short title.'); return; }
       m.date = $('memDate').value; m.note = $('memNote').value.trim();
       const clean = { ...m }; delete clean._marker;
+      clean.photo = clean.photos[0] || null; // older versions of the app read this one
       await store.put('memories', clean);
       state.memories = state.memories.filter((x) => x.id !== clean.id).concat(clean);
       closeSheet(); renderAll(); toast(existing ? 'Memory updated' : 'Memory saved');
@@ -582,7 +633,7 @@
       for (const it of items) {
         const li = document.createElement('li');
         if (listTab === 'memories') {
-          li.innerHTML = `${it.photo ? `<img class="thumb" src="${it.photo}" alt="">` : '<span class="thumb"><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.4-7 10-7 10z"/></svg></span>'}
+          li.innerHTML = `${photosOf(it)[0] ? `<img class="thumb" src="${photosOf(it)[0]}" alt="">` : '<span class="thumb"><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.4-7 10-7 10z"/></svg></span>'}
             <div class="txt"><div class="t">${esc(it.title)}</div><div class="s">${it.date ? fmtDate(it.date) : ''}</div></div>`;
           li.onclick = () => { closeSheet(); map.flyTo([it.lat, it.lng], 17); setTimeout(() => it._marker && it._marker.openPopup(), 700); };
         } else {
@@ -647,7 +698,7 @@
   // ---------- startup ----------
   async function load() {
     state.walks = (await store.all('walks')) || [];
-    state.memories = ((await store.all('memories')) || []).map((m) => (!m.photo && m.photos && m.photos.length ? { ...m, photo: m.photos[0] } : m));
+    state.memories = (await store.all('memories')) || [];
     renderAll();
   }
 
@@ -677,7 +728,72 @@
     startRecording(null, true);
   }
 
-  NinikoPlaces.init(map, { onAddMemory: (latlng, name) => openMemoryForm(null, latlng, name), toast });
+  const places = NinikoPlaces.init(map, { onAddMemory: (latlng, name) => openMemoryForm(null, latlng, name), toast });
+
+  // ---------- map style ----------
+  $('btnStyle').onclick = () => {
+    if (state.mode !== 'idle') cancelMode();
+    const node = h(`<ul class="list">${Object.entries(BASEMAPS).map(([k, b]) => `<li data-k="${k}" aria-selected="${k === baseKey}">
+      <span class="thumb style-sw style-${k}"></span><div class="txt"><div class="t">${b.name}${k === baseKey ? ' ✓' : ''}</div><div class="s">${b.note}</div></div></li>`).join('')}</ul>`);
+    openSheet('Map style', node);
+    node.querySelectorAll('li').forEach((li) => { li.onclick = () => { setBasemap(li.dataset.k); closeSheet(); }; });
+  };
+
+  // ---------- photo button ----------
+  // Take a photo and it joins the memory you're standing at (within PHOTO_JOIN_M),
+  // or starts a new memory there named after the nearest popular place.
+  const PHOTO_JOIN_M = 40;
+  let photoTarget = null, photoFix = null;
+  function takePhotoFor(m) {
+    if (state.mode !== 'idle') cancelMode();
+    photoTarget = m || null;
+    // Start finding GPS while the camera is open, so the spot is ready when the photo is.
+    photoFix = m ? null : locateOnce().then((p) => p, (e) => ({ error: e }));
+    $('cameraInput').click();
+  }
+  $('btnPhoto').onclick = () => takePhotoFor(null);
+  $('cameraInput').onchange = async (e) => {
+    const files = Array.from(e.target.files || []); e.target.value = '';
+    if (!files.length) return;
+    toast('Saving photo…', 6000);
+    const photos = [];
+    for (const f of files) { try { photos.push(await resizeImage(f)); } catch (err) { toast(err.message); } }
+    if (!photos.length) return;
+    if (photoTarget) { const m = photoTarget; photoTarget = null; await addPhotosTo(m, photos); return; }
+    const recent = lastFix && Date.now() - lastFix.at < 20000 && lastFix.acc <= 50 ? lastFix : null;
+    const fix = recent ? { coords: { latitude: recent.lat, longitude: recent.lng, accuracy: recent.acc } }
+      : await (photoFix || locateOnce().then((p) => p, (err) => ({ error: err })));
+    if (fix.error) {
+      toast('Photo kept. I could not find where you are, so tap the spot on the map.', 5000);
+      setMode('pickPhoto');
+      showHint('Tap where you took the photo', [{ label: 'Cancel', onClick: cancelMode }]);
+      state.pendingPhotos = photos;
+      return;
+    }
+    const { latitude, longitude, accuracy } = fix.coords; showMe(latitude, longitude, accuracy);
+    await attachPhotos(photos, latitude, longitude);
+  };
+
+  async function attachPhotos(photos, lat, lng) {
+    let best = null, bestD = Infinity;
+    for (const m of state.memories) { const d = haversine([lat, lng], [m.lat, m.lng]); if (d < bestD) { bestD = d; best = m; } }
+    if (best && bestD <= PHOTO_JOIN_M) return addPhotosTo(best, photos);
+    const place = places && places.near ? places.near(lat, lng, 60)[0] : null;
+    const m = { id: uid(), lat, lng, title: place ? place.name : 'Photo at ' + fmtTime(Date.now()), note: '', date: todayISO(), photos: [], createdAt: Date.now() };
+    await addPhotosTo(m, photos, true);
+  }
+
+  async function addPhotosTo(m, photos, isNew) {
+    const clean = { ...m, photos: photosOf(m).concat(photos) }; delete clean._marker;
+    clean.photo = clean.photos[0];
+    await store.put('memories', clean);
+    state.memories = state.memories.filter((x) => x.id !== clean.id).concat(clean);
+    renderAll();
+    toast(isNew ? `Photo saved as a new memory: “${clean.title}”` : `Photo added to “${clean.title}”`, 3500);
+    const mk = state.memories.find((x) => x.id === clean.id)._marker;
+    map.setView([clean.lat, clean.lng], Math.max(map.getZoom(), 17));
+    setTimeout(() => mk && mk.openPopup(), 300);
+  }
 
   load().then(() => {
     if (state.walks.length || state.memories.length) fitAll();

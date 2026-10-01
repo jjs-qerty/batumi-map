@@ -48,11 +48,9 @@ button { font: inherit; color: inherit; }
 
 #map { position: fixed; inset: 0; background: var(--surface-2); }
 .leaflet-container { font-family: var(--font); }
-/* Softer, calmer basemap: fewer saturated colours so walks, pins and places stand out. */
-:root { --tiles: saturate(0.45) brightness(1.05) contrast(0.92); }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --tiles: invert(1) hue-rotate(180deg) saturate(0.35) brightness(0.9) contrast(0.88); } }
-:root[data-theme="dark"] { --tiles: invert(1) hue-rotate(180deg) saturate(0.35) brightness(0.9) contrast(0.88); }
-.base-tiles { filter: var(--tiles); }
+/* Map styles. Bright stays bright even when the phone is in dark mode. */
+.tiles-bright { filter: saturate(1.08) brightness(1.03); }
+.tiles-soft { filter: saturate(0.45) brightness(1.05) contrast(0.92); }
 .picking #map { cursor: crosshair; }
 
 /* Top chips */
@@ -119,8 +117,11 @@ button { font: inherit; color: inherit; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .tool-rec { color: #0b1a1d; } }
 :root[data-theme="dark"] .tool-rec { color: #0b1a1d; }
 
-.locate {
+.map-buttons {
   position: fixed; z-index: 650; right: 12px; bottom: calc(env(safe-area-inset-bottom, 0px) + 96px);
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+}
+.locate {
   width: 46px; height: 46px; border-radius: 50%; border: 0; background: var(--surface);
   box-shadow: var(--shadow); color: var(--sea); display: grid; place-items: center; cursor: pointer;
 }
@@ -261,3 +262,20 @@ button { font: inherit; color: inherit; }
 .switch-row { display: flex; align-items: center; gap: 12px; justify-content: space-between; background: var(--surface-2); border-radius: 12px; padding: 10px 12px; cursor: pointer; }
 .switch-row > span { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .switch-row input { width: 22px; height: 22px; flex: none; accent-color: var(--sea); }
+
+/* Photo button and photos */
+.photo-btn { width: 56px; height: 56px; background: var(--sea); color: #fff; }
+.photo-btn svg { width: 26px; height: 26px; }
+.gallery { display: flex; gap: 6px; overflow-x: auto; scroll-snap-type: x mandatory; margin: 4px 0 2px; }
+.gallery img { flex: none; width: 85%; margin: 0; scroll-snap-align: start; }
+.thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.thumbs:empty { display: none; }
+.thumb-wrap { position: relative; width: 72px; height: 72px; }
+.thumb-wrap img { width: 100%; height: 100%; object-fit: cover; border-radius: 10px; display: block; }
+.thumb-wrap button { position: absolute; top: -6px; right: -6px; width: 24px; height: 24px; border-radius: 50%; border: 0;
+  background: #222; color: #fff; font-size: 16px; line-height: 24px; padding: 0; cursor: pointer; }
+/* Map style picker swatches */
+.style-sw { background-size: cover; }
+.style-bright { background: linear-gradient(135deg, #aad3df 0 35%, #f2efe9 35% 65%, #c8facc 65%); }
+.style-colourful { background: linear-gradient(135deg, #b5d0d0 0 35%, #f7e8c4 35% 65%, #b9e3a8 65%); }
+.style-soft { background: linear-gradient(135deg, #d6e2e6 0 35%, #f4f2ee 35% 65%, #dde8dc 65%); }

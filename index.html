@@ -56,9 +56,17 @@
     </button>
   </nav>
 
-  <button class="locate" id="btnLocate" type="button" aria-label="Show where I am">
-    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7.5"/></svg>
-  </button>
+  <div class="map-buttons">
+    <button class="locate" id="btnStyle" type="button" aria-label="Change map style">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg>
+    </button>
+    <button class="locate" id="btnLocate" type="button" aria-label="Show where I am">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7.5"/></svg>
+    </button>
+    <button class="locate photo-btn" id="btnPhoto" type="button" aria-label="Take a photo for a memory here">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+    </button>
+  </div>
 
   <!-- Bottom sheet used for lists and forms -->
   <div class="scrim" id="scrim" hidden></div>
@@ -75,6 +83,7 @@
 
   <div class="toast" id="toast" role="status" hidden></div>
   <input type="file" id="importFile" accept="application/json,.json" hidden>
+  <input type="file" id="cameraInput" accept="image/*" capture="environment" hidden>
 
   <script src="vendor/leaflet.js"></script>
   <script src="poi.js"></script>
