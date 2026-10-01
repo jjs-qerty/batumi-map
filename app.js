@@ -20,6 +20,12 @@
   const PHOTO_JOIN_M = 30;           // a photo within this distance of a memory joins that memory
   const PIN_COLORS = ['#e8456b', '#f2a516', '#2b8a3e', '#1c7ed6', '#7048e8', '#495057'];
 
+  // Running inside the Android app (Capacitor) rather than a browser.
+  const CAP = window.Capacitor;
+  const NATIVE = !!(CAP && CAP.isNativePlatform && CAP.isNativePlatform());
+  const plugin = (name) => (NATIVE ? (CAP.Plugins && CAP.Plugins[name]) || (CAP.registerPlugin && CAP.registerPlugin(name)) : null);
+  if (NATIVE) document.documentElement.classList.add('native');
+
   // ---------- tiny helpers ----------
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -378,22 +384,46 @@
   }
 
   // One shared GPS watch for recording, directions and the blue dot.
+  // In the Android app it runs as a background service, so it keeps going with the screen off.
   const gps = (function () {
     const subs = new Set();
+    const BG = plugin('BackgroundGeolocation');
     let watchId = null, last = null;
+    const emit = (f) => { last = f; showMe(f.lat, f.lng); subs.forEach((s) => s.fn(f)); };
+    const fail = (err) => subs.forEach((s) => s.onError && s.onError(err));
     function start() {
-      if (watchId != null || !('geolocation' in navigator)) return;
+      if (watchId != null) return;
+      if (BG) {
+        watchId = 'pending';
+        const notify = plugin('LocalNotifications');
+        if (notify && notify.requestPermissions) notify.requestPermissions().catch(() => {});
+        BG.addWatcher({
+          backgroundTitle: "Niniko's Map", backgroundMessage: 'Recording your walk around Batumi.',
+          requestPermissions: true, stale: false, distanceFilter: 3,
+        }, (loc, err) => {
+          if (err) { fail({ code: err.code === 'NOT_AUTHORIZED' ? 1 : 2 }); return; }
+          if (loc) emit({ lat: loc.latitude, lng: loc.longitude, acc: loc.accuracy || 10, t: loc.time || Date.now() });
+        }).then((id) => {
+          if (watchId === 'pending') watchId = id; else BG.removeWatcher({ id });
+        }).catch(() => { watchId = null; fail({ code: 2 }); });
+        return;
+      }
+      if (!('geolocation' in navigator)) return;
       watchId = navigator.geolocation.watchPosition((pos) => {
-        last = { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy, t: pos.timestamp || Date.now() };
-        showMe(last.lat, last.lng);
-        subs.forEach((s) => s.fn(last));
-      }, (err) => { subs.forEach((s) => s.onError && s.onError(err)); }, { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
+        emit({ lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy, t: pos.timestamp || Date.now() });
+      }, fail, { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
+    }
+    function stop() {
+      if (watchId == null) return;
+      if (BG) { if (watchId !== 'pending') BG.removeWatcher({ id: watchId }); }
+      else navigator.geolocation.clearWatch(watchId);
+      watchId = null;
     }
     return {
       subscribe(fn, onError) {
         const s = { fn, onError }; subs.add(s); start();
         if (last && Date.now() - last.t < 5000) fn(last);
-        return () => { subs.delete(s); if (!subs.size && watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; } };
+        return () => { subs.delete(s); if (!subs.size) stop(); };
       },
       get last() { return last; },
     };
@@ -476,7 +506,7 @@
       if (pts.length > 1) setGeo('rec', fc([line(pts)]));
       saveRecDraft(); updateRecBanner();
     }, (err) => { $('recText').textContent = 'GPS paused'; if (err.code === 1) { toast(geoError(err), 4500); stopRecording(false); } });
-    if (!resume && !auto) toast('Walk started. Keep the app open while you walk.', 3500);
+    if (!resume && !auto) toast(NATIVE ? 'Walk started. It keeps recording with the screen off.' : 'Walk started. Keep the app open while you walk.', 3500);
   }
 
   // quiet: save without asking for a name (used for automatic trails).
@@ -922,7 +952,7 @@
       </div>
       <ul class="list" id="listItems"></ul>
       <label class="switch-row" for="autoRec"><span><b>Record my trail whenever the app is open</b>
-        <span class="note">Starts by itself when you open the app. A break of more than 30 minutes starts a new walk.</span></span>
+        <span class="note">${NATIVE ? 'Starts when you open the app and keeps going with the screen off (you will see a notification).' : 'Starts by itself when you open the app.'} A break of more than 30 minutes starts a new walk.</span></span>
         <input type="checkbox" id="autoRec" role="switch"></label>
       <div class="section-title">More</div>
       <div class="more">
@@ -1003,14 +1033,24 @@
   }
 
   // ---------- backup ----------
-  function exportBackup() {
+  async function exportBackup() {
     const strip = (o) => { const c = { ...o }; delete c._marker; return c; };
     const data = { app: 'niniko-map', version: 2, exportedAt: new Date().toISOString(),
       walks: state.walks.map(strip), memories: state.memories.map(strip), pins: state.pins.map(strip),
       visited: places ? places.exportVisited() : {} };
+    const fileName = `batumi-map-backup-${todayISO()}.json`;
+    const fsys = plugin('Filesystem'), share = plugin('Share');
+    if (fsys && share) {
+      // The Android app can't download files, so save the backup and open the share menu (Drive, email, Files…).
+      try {
+        const res = await fsys.writeFile({ path: fileName, data: JSON.stringify(data), directory: 'CACHE', encoding: 'utf8' });
+        await share.share({ title: 'Niniko\'s Map backup', files: [res.uri] });
+      } catch (e) { toast('Could not share the backup.'); }
+      return;
+    }
     const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob); a.download = `batumi-map-backup-${todayISO()}.json`;
+    a.href = URL.createObjectURL(blob); a.download = fileName;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
     toast('Backup saved to your downloads');
@@ -1073,7 +1113,7 @@
     if (window.isSecureContext && 'geolocation' in navigator) startTrail(); else offerResume();
   });
 
-  if ('serviceWorker' in navigator && window.isSecureContext) {
+  if (!NATIVE && 'serviceWorker' in navigator && window.isSecureContext) {
     window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
   }
 })();
