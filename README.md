@@ -6,6 +6,10 @@ A phone web app with a map of Batumi that remembers the streets you walked and t
 - **Start walk / Finish walk** records your route with GPS and draws it in pink. Every walk stays on the map, so the streets you have walked fill in over time.
 - **Memory** pins a place (where you are now, or any spot you tap) with a title, date, story and an optional photo.
 - **My map** lists walks and memories, lets you draw a past walk by tapping along streets, and saves or restores a backup file.
+- **Trail times**: tap any point of a recorded walk to see when you were there.
+- **Automatic trail**: while the app is open it records where you go (turn this off in *My map*). A break of more than 30 minutes starts a new walk.
+- **Places**: chips at the top show sights, museums, galleries, event venues, parks, cafés, restaurants, bars, pharmacies and hospitals from OpenStreetMap. Each place shows whether it is open now (Batumi time, from its listed opening hours) and whether you need a ticket. The main paid sights have notes on price and where to buy; prices are the last known ones and should be checked. *Open now* hides closed places.
+- **Events**: there is no free live feed of Batumi events, so the map shows event venues (theatres, cinemas, arts centres, clubs, stadiums) with links to tkt.ge and biletebi.ge for what's on.
 - Everything is stored on the phone only. Use *Save a backup* now and then.
 
 ## Putting it on your phone
@@ -31,4 +35,4 @@ GitHub Pages works too and is free; it needs a GitHub repository.
 - Recording in the background with the screen off would need a native iPhone/Android app.
 
 ## Files
-`index.html`, `app.css`, `app.js` (the app), `sw.js` (offline support and map tile caching), `manifest.webmanifest` and `icons/` (home-screen install), `vendor/` (Leaflet 1.9.4 map library). Map data © OpenStreetMap contributors.
+`index.html`, `app.css`, `app.js` (the app), `poi.js` (places, opening hours, ticket notes), `sw.js` (offline support and map tile caching), `manifest.webmanifest` and `icons/` (home-screen install), `vendor/` (Leaflet 1.9.4 map library). Map data © OpenStreetMap contributors, map style © CARTO, places via the Overpass API.

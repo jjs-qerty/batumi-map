@@ -4,6 +4,9 @@
 
   const BATUMI = [41.6430, 41.6360]; // Old Boulevard / Europe Square area
   const MIN_STEP_M = 5;              // ignore GPS jitter smaller than this
+  const AUTO_KEY = 'niniko.autoRecord';
+  const AUTO_GAP_MS = 30 * 60000;    // a trail paused longer than this becomes its own walk
+  const AUTO_MIN_M = 50;             // automatic trails shorter than this are dropped
   const MAX_ACCURACY_M = 40;         // ignore fixes worse than this
   const REC_KEY = 'niniko.recording';
 
@@ -85,12 +88,18 @@
   })();
 
   // ---------- map ----------
+  // Keep popups clear of the title, filter chips and bottom toolbar when they open.
+  L.Popup.mergeOptions({ autoPanPaddingTopLeft: L.point(12, 170), autoPanPaddingBottomRight: L.point(12, 110) });
   const map = L.map('map', { zoomControl: false, attributionControl: true }).setView(BATUMI, 15);
-  L.control.zoom({ position: 'topright' }).addTo(map);
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  // Soft CARTO basemap (OpenStreetMap data): Voyager by day, Dark Matter when the phone is in dark mode.
+  const darkQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  const isDark = () => document.documentElement.dataset.theme === 'dark' || (document.documentElement.dataset.theme !== 'light' && darkQuery && darkQuery.matches);
+  const baseUrl = () => `https://{s}.basemaps.cartocdn.com/${isDark() ? 'dark_all' : 'rastertiles/voyager'}/{z}/{x}/{y}{r}.png`;
+  const base = L.tileLayer(baseUrl(), {
+    maxZoom: 20, subdomains: 'abcd', crossOrigin: true,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
   }).addTo(map);
+  if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change', () => { base.setUrl(baseUrl()); renderAll(); });
 
   const walkColor = () => getComputedStyle(document.documentElement).getPropertyValue('--walk').trim() || '#e8456b';
   const walkStyle = () => ({ color: walkColor(), weight: 6, opacity: 0.6, lineCap: 'round', lineJoin: 'round' });
@@ -120,12 +129,9 @@
   function renderWalks() {
     walksLayer.clearLayers();
     for (const w of state.walks) {
-      const line = L.polyline(w.points.map((p) => [p[0], p[1]]), walkStyle());
-      line.on('click', (e) => {
-        L.DomEvent.stopPropagation(e);
-        if (state.mode !== 'idle') handleMapTap(e.latlng); else openWalkPopup(w, e.latlng);
-      });
-      line.addTo(walksLayer);
+      const pts = w.points.map((p) => [p[0], p[1]]);
+      L.polyline(pts, { ...walkStyle(), interactive: false }).addTo(walksLayer);
+      trailHitLine(pts, (latlng) => openWalkPopup(w, latlng)).addTo(walksLayer);
     }
   }
 
@@ -151,15 +157,54 @@
 
   function renderAll() { renderWalks(); renderMemories(); renderStats(); }
 
+  // A wide invisible line on top of each trail so it is easy to tap with a finger.
+  function trailHitLine(pts, onTap) {
+    const hit = L.polyline(pts, { color: '#000', opacity: 0, weight: 26, lineCap: 'round', lineJoin: 'round' });
+    hit.on('click', (e) => {
+      L.DomEvent.stopPropagation(e);
+      if (state.mode !== 'idle') handleMapTap(e.latlng); else onTap(e.latlng);
+    });
+    return hit;
+  }
+
+  // The recorded point closest to where the trail was tapped.
+  function nearestPoint(points, latlng) {
+    const tap = map.latLngToLayerPoint(latlng);
+    let best = null, bestD = Infinity;
+    for (const p of points) {
+      const d = map.latLngToLayerPoint([p[0], p[1]]).distanceTo(tap);
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    return best;
+  }
+
+  let trailDot = null;
+  function markTrailPoint(p) {
+    if (trailDot) map.removeLayer(trailDot);
+    trailDot = L.circleMarker([p[0], p[1]], { radius: 7, color: '#fff', weight: 3, fillColor: walkColor(), fillOpacity: 1, interactive: false }).addTo(map);
+  }
+  map.on('popupclose', () => { if (trailDot) { map.removeLayer(trailDot); trailDot = null; } });
+
+  function fmtClock(ms) {
+    const d = new Date(ms), sameDay = d.toDateString() === new Date().toDateString();
+    return fmtTime(ms) + (sameDay ? ' today' : ', ' + d.toLocaleDateString(undefined, { day: 'numeric', month: 'long' }));
+  }
+
   // ---------- walk popups ----------
   function openWalkPopup(w, latlng) {
     const dur = w.endedAt && w.startedAt ? ` · ${fmtDur(w.endedAt - w.startedAt)}` : '';
-    const html = `<div class="pop"><h3>${esc(w.name)}</h3>
-      <div class="when">${fmtDate(w.startedAt)}${w.drawn ? '' : ' · ' + fmtTime(w.startedAt)}</div>
+    const near = nearestPoint(w.points, latlng);
+    const atPoint = near && near[2]
+      ? `<div class="here-at">You were here at <b>${fmtClock(near[2])}</b></div>`
+      : (w.drawn ? '<div class="when">Drawn by hand, so there are no times on this walk.</div>' : '');
+    const span = !w.drawn && w.endedAt ? `${fmtTime(w.startedAt)}–${fmtTime(w.endedAt)}` : '';
+    const html = `<div class="pop">${atPoint}<h3>${esc(w.name)}</h3>
+      <div class="when">${fmtDate(w.startedAt)}${span ? ' · ' + span : ''}</div>
       <p>${fmtDist(w.distance)}${dur}</p>
       <div class="row"><button class="btn btn-sm" data-act="rename">Rename</button>
       <button class="btn btn-sm btn-danger" data-act="delete">Delete walk</button></div></div>`;
-    const pop = L.popup({ maxWidth: 270 }).setLatLng(latlng).setContent(html).openOn(map);
+    const pop = L.popup({ maxWidth: 270 }).setLatLng(near ? [near[0], near[1]] : latlng).setContent(html).openOn(map);
+    if (near && near[2]) markTrailPoint(near);
     const el = pop.getElement();
     el.querySelector('[data-act="rename"]').onclick = () => { map.closePopup(); openWalkForm(w); };
     armDelete(el.querySelector('[data-act="delete"]'), async () => {
@@ -277,8 +322,16 @@
   async function requestWakeLock() {
     try { if ('wakeLock' in navigator) state.wakeLock = await navigator.wakeLock.request('screen'); } catch (e) { state.wakeLock = null; }
   }
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && state.recording && !state.wakeLock) requestWakeLock();
+  const autoOn = () => { try { return localStorage.getItem(AUTO_KEY) !== 'off'; } catch (e) { return true; } };
+  const lastPointTime = (rec) => (rec.points.length ? rec.points[rec.points.length - 1][2] : rec.startedAt);
+
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState !== 'visible' || !state.recording) return;
+    // Back after a long break: close the old trail and start a fresh one.
+    if (autoOn() && Date.now() - lastPointTime(state.recording) > AUTO_GAP_MS) {
+      await stopRecording(true, true); startRecording(null, true); return;
+    }
+    if (!state.wakeLock) requestWakeLock();
   });
 
   function updateRecBanner() {
@@ -288,11 +341,24 @@
   }
   let recTick = null;
 
-  function startRecording(resume) {
+  function liveTrailPopup(latlng) {
+    const rec = state.recording; if (!rec) return;
+    const near = nearestPoint(rec.points, latlng); if (!near) return;
+    L.popup({ maxWidth: 260 }).setLatLng([near[0], near[1]])
+      .setContent(`<div class="pop"><div class="here-at">You were here at <b>${fmtClock(near[2])}</b></div><div class="when">Current trail · ${fmtDist(pathLength(rec.points))} so far</div></div>`)
+      .openOn(map);
+    markTrailPoint(near);
+  }
+
+  function startRecording(resume, auto) {
     if (!('geolocation' in navigator)) { toast('This browser cannot read GPS.'); return; }
     if (!window.isSecureContext) { toast(geoError(), 4500); return; }
     state.recording = resume || { id: uid(), startedAt: Date.now(), points: [] };
-    state.recLine = L.polyline(state.recording.points.map((p) => [p[0], p[1]]), { ...walkStyle(), opacity: 0.95, dashArray: null }).addTo(map);
+    const startPts = state.recording.points.map((p) => [p[0], p[1]]);
+    state.recLine = L.layerGroup([
+      L.polyline(startPts, { ...walkStyle(), opacity: 0.95, interactive: false }),
+      trailHitLine(startPts, liveTrailPopup),
+    ]).addTo(map);
     document.body.classList.add('recording');
     $('btnRecLabel').textContent = 'Finish walk';
     $('recBanner').hidden = false; $('recText').textContent = 'Recording';
@@ -306,14 +372,15 @@
       if (accuracy > MAX_ACCURACY_M) { $('recText').textContent = 'Waiting for better GPS'; return; }
       $('recText').textContent = 'Recording';
       const pts = state.recording.points, p = [lat, lng, pos.timestamp];
-      if (pts.length && haversine(pts[pts.length - 1], p) < MIN_STEP_M) return;
-      pts.push(p); state.recLine.addLatLng([lat, lng]); saveRecDraft(); updateRecBanner();
+      if (pts.length && haversine(pts[pts.length - 1], p) < Math.max(MIN_STEP_M, Math.min(accuracy, 25))) return;
+      pts.push(p); state.recLine.eachLayer((l) => l.addLatLng([lat, lng])); saveRecDraft(); updateRecBanner();
     }, (err) => { $('recText').textContent = 'GPS paused'; if (err.code === 1) { toast(geoError(err), 4500); stopRecording(false); } },
     { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
-    if (!resume) toast('Walk started. Keep the app open while you walk.', 3500);
+    if (!resume && !auto) toast('Walk started. Keep the app open while you walk.', 3500);
   }
 
-  function stopRecording(save) {
+  // quiet: save without asking for a name (used for automatic trails).
+  function stopRecording(save, quiet) {
     if (state.watchId != null) navigator.geolocation.clearWatch(state.watchId);
     state.watchId = null;
     clearInterval(recTick);
@@ -324,13 +391,17 @@
     if (state.recLine) { map.removeLayer(state.recLine); state.recLine = null; }
     const rec = state.recording; state.recording = null;
     if (!save || !rec) { clearRecDraft(); return; }
-    if (rec.points.length < 2) { clearRecDraft(); toast('Walk was too short to save.'); return; }
+    const dist = pathLength(rec.points);
+    if (rec.points.length < 2 || (quiet && dist < AUTO_MIN_M)) {
+      clearRecDraft(); if (!quiet) toast('Walk was too short to save.'); return Promise.resolve();
+    }
+    const last = rec.points[rec.points.length - 1][2];
     const w = {
       id: rec.id, name: 'Walk on ' + new Date(rec.startedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }),
-      startedAt: rec.startedAt, endedAt: Date.now(), points: rec.points, distance: pathLength(rec.points),
+      startedAt: rec.startedAt, endedAt: quiet && last ? last : Date.now(), points: rec.points, distance: dist,
     };
-    store.put('walks', w).then(() => {
-      clearRecDraft(); state.walks.push(w); renderAll(); openWalkForm(w, true);
+    return store.put('walks', w).then(() => {
+      clearRecDraft(); state.walks.push(w); renderAll(); if (!quiet) openWalkForm(w, true);
     });
   }
 
@@ -432,8 +503,8 @@
     });
   }
 
-  function openMemoryForm(existing, latlng) {
-    const m = existing ? { ...existing } : { id: uid(), lat: latlng.lat, lng: latlng.lng, title: '', note: '', date: todayISO(), photo: null, createdAt: Date.now() };
+  function openMemoryForm(existing, latlng, title) {
+    const m = existing ? { ...existing } : { id: uid(), lat: latlng.lat, lng: latlng.lng, title: title || '', note: '', date: todayISO(), photo: null, createdAt: Date.now() };
     const node = h(`
       <div class="field"><label for="memTitle">What happened here</label><input type="text" id="memTitle" maxlength="100" placeholder="First swim at the boulevard"></div>
       <div class="field"><label for="memDate">When</label><input type="date" id="memDate"></div>
@@ -484,6 +555,9 @@
         <button role="tab" type="button" id="tabWalk" aria-selected="${listTab === 'walks'}">Walks</button>
       </div>
       <ul class="list" id="listItems"></ul>
+      <label class="switch-row" for="autoRec"><span><b>Record my trail whenever the app is open</b>
+        <span class="note">Starts by itself when you open the app. A break of more than 30 minutes starts a new walk.</span></span>
+        <input type="checkbox" id="autoRec" role="switch"></label>
       <div class="section-title">More</div>
       <div class="more">
         <button class="btn" type="button" id="moreDraw">Draw a past walk</button>
@@ -525,6 +599,11 @@
     };
     $('tabMem').onclick = () => { listTab = 'memories'; fill(); };
     $('tabWalk').onclick = () => { listTab = 'walks'; fill(); };
+    $('autoRec').checked = autoOn();
+    $('autoRec').onchange = (e) => {
+      try { localStorage.setItem(AUTO_KEY, e.target.checked ? 'on' : 'off'); } catch (err) { /* ignore */ }
+      if (e.target.checked && !state.recording) { closeSheet(); startRecording(null, true); }
+    };
     $('moreDraw').onclick = startDrawWalk;
     $('moreFit').onclick = () => { closeSheet(); fitAll(); };
     $('moreExport').onclick = exportBackup;
@@ -587,9 +666,22 @@
     $('resGo').onclick = () => { closeSheet(); startRecording(draft); };
   }
 
+  async function startTrail() {
+    if (!autoOn()) { offerResume(); return; }
+    let draft = null;
+    try { draft = JSON.parse(localStorage.getItem(REC_KEY) || 'null'); } catch (e) { draft = null; }
+    if (draft && draft.points) {
+      if (Date.now() - lastPointTime(draft) < AUTO_GAP_MS) { startRecording(draft, true); return; }
+      state.recording = draft; await stopRecording(true, true);
+    }
+    startRecording(null, true);
+  }
+
+  NinikoPlaces.init(map, { onAddMemory: (latlng, name) => openMemoryForm(null, latlng, name), toast });
+
   load().then(() => {
-    offerResume();
     if (state.walks.length || state.memories.length) fitAll();
+    if (window.isSecureContext && 'geolocation' in navigator) startTrail(); else offerResume();
   });
 
   if ('serviceWorker' in navigator && window.isSecureContext) {

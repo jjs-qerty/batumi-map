@@ -21,11 +21,12 @@
 
   <header class="topbar">
     <div class="brand">
-      <span class="brand-name">Niniko's Map</span>
-      <span class="brand-sub">ბათუმი · Batumi</span>
+      <span class="brand-name">Niniko's Map <span class="brand-city">ბათუმი</span></span>
+      <span class="stats" id="stats" aria-live="polite"></span>
     </div>
-    <div class="stats" id="stats" aria-live="polite"></div>
   </header>
+
+  <div class="chips" id="chips" role="toolbar" aria-label="Show places on the map"></div>
 
   <!-- Shown while recording a walk -->
   <div class="rec-banner" id="recBanner" hidden>
@@ -76,6 +77,7 @@
   <input type="file" id="importFile" accept="application/json,.json" hidden>
 
   <script src="vendor/leaflet.js"></script>
+  <script src="poi.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

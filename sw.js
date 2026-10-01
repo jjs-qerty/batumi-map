@@ -1,8 +1,8 @@
 /* Keeps the app working offline and remembers map tiles you've already looked at. */
-const APP_CACHE = 'niniko-app-v1';
+const APP_CACHE = 'niniko-app-v2';
 const TILE_CACHE = 'niniko-tiles-v1';
 const MAX_TILES = 3000;
-const APP_FILES = ['./', 'index.html', 'app.css', 'app.js', 'vendor/leaflet.css', 'vendor/leaflet.js',
+const APP_FILES = ['./', 'index.html', 'app.css', 'app.js', 'poi.js', 'vendor/leaflet.css', 'vendor/leaflet.js',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
@@ -26,7 +26,7 @@ self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
 
   // Map tiles: use the saved copy if there is one, otherwise fetch and save it.
-  if (url.hostname === 'tile.openstreetmap.org') {
+  if (url.hostname.endsWith('basemaps.cartocdn.com') || url.hostname === 'tile.openstreetmap.org') {
     e.respondWith(caches.open(TILE_CACHE).then(async (c) => {
       const hit = await c.match(e.request);
       if (hit) return hit;
