@@ -31,9 +31,15 @@ GPS only works when the app is opened from an `https://` address, so the folder 
 
 GitHub Pages works too and is free; it needs a GitHub repository.
 
+## Android app (records with the screen off)
+Download **https://github.com/jjs-qerty/batumi-map/releases/download/android/niniko-map.apk** on the phone and open it. Android asks once to allow installing apps from your browser. The app records your trail through a background service, so it keeps going when the screen is locked; a notification shows while it records.
+
+Every push to `main` rebuilds the APK (`.github/workflows/android.yml`, `native/build-android.sh`) and replaces it in the `android` release. Installing a newer APK over the old one keeps your data, because every build is signed with the same key (`native/niniko.keystore`).
+
+The web app and the Android app keep separate data. To move walks and memories across, use *Save a backup* in one and *Restore a backup* in the other.
+
 ## Good to know
-- Keep the app open on screen while recording. Phones pause GPS for web apps when the screen locks or you switch apps. The app asks the phone to keep the screen awake, and if it does get interrupted it offers to resume the walk next time you open it.
-- Recording in the background with the screen off would need a native iPhone/Android app.
+- In the web version, keep the app open on screen while recording. Phones pause GPS for web apps when the screen locks or you switch apps. The app asks the phone to keep the screen awake, and if it does get interrupted it offers to resume the walk next time you open it.
 
 ## Files
 `index.html`, `app.css`, `app.js` (the app), `poi.js` (places, opening hours, ticket notes, visited tags), `sw.js` (offline support and map tile caching), `manifest.webmanifest` and `icons/` (home-screen install), `vendor/` (MapLibre GL JS 5.24.0). Map data © OpenStreetMap contributors, map style and tiles by OpenFreeMap, places via the Overpass API, walking routes via routing.openstreetmap.de.
