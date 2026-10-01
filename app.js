@@ -95,11 +95,23 @@
   const darkQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
   const isDark = () => document.documentElement.dataset.theme === 'dark' || (document.documentElement.dataset.theme !== 'light' && darkQuery && darkQuery.matches);
   const baseUrl = () => `https://{s}.basemaps.cartocdn.com/${isDark() ? 'dark_all' : 'rastertiles/voyager'}/{z}/{x}/{y}{r}.png`;
+  const OSM_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
   const base = L.tileLayer(baseUrl(), {
-    maxZoom: 20, subdomains: 'abcd', crossOrigin: true,
+    maxZoom: 20, subdomains: 'abcd',
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
   }).addTo(map);
-  if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change', () => { base.setUrl(baseUrl()); renderAll(); });
+  // If the soft map can't load on this phone, fall back to the standard OpenStreetMap tiles.
+  let tilesLoaded = 0, tileErrors = 0, usingOsm = false;
+  base.on('tileload', () => { tilesLoaded++; });
+  base.on('tileerror', () => {
+    tileErrors++;
+    if (!usingOsm && tilesLoaded === 0 && tileErrors >= 3) {
+      usingOsm = true;
+      base.options.maxZoom = 19;
+      base.setUrl(OSM_URL);
+    }
+  });
+  if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change', () => { if (!usingOsm) base.setUrl(baseUrl()); renderAll(); });
 
   const walkColor = () => getComputedStyle(document.documentElement).getPropertyValue('--walk').trim() || '#e8456b';
   const walkStyle = () => ({ color: walkColor(), weight: 6, opacity: 0.6, lineCap: 'round', lineJoin: 'round' });
