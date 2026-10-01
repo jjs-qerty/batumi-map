@@ -53,9 +53,11 @@
       if (dbp) return dbp;
       dbp = new Promise((resolve) => {
         try {
-          const req = indexedDB.open('niniko-map', 1);
+          // Version 2 matches the newer app, so pins and photos it saved stay on the phone untouched.
+          const req = indexedDB.open('niniko-map', 2);
           req.onupgradeneeded = () => {
             const db = req.result;
+            if (!db.objectStoreNames.contains('pins')) db.createObjectStore('pins', { keyPath: 'id' });
             if (!db.objectStoreNames.contains('walks')) db.createObjectStore('walks', { keyPath: 'id' });
             if (!db.objectStoreNames.contains('memories')) db.createObjectStore('memories', { keyPath: 'id' });
           };
@@ -645,7 +647,7 @@
   // ---------- startup ----------
   async function load() {
     state.walks = (await store.all('walks')) || [];
-    state.memories = (await store.all('memories')) || [];
+    state.memories = ((await store.all('memories')) || []).map((m) => (!m.photo && m.photos && m.photos.length ? { ...m, photo: m.photos[0] } : m));
     renderAll();
   }
 
