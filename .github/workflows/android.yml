@@ -24,8 +24,8 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-      - uses: android-actions/setup-android@v3
       - name: Build APK
+        # GitHub's Ubuntu runners already have the Android SDK (ANDROID_HOME).
         run: native/build-android.sh
       - name: Publish to the "android" release
         env:
