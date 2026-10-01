@@ -9,6 +9,11 @@ A phone web app with a map of Batumi that remembers the streets you walked and t
 - Everything is stored on the phone only. Use *Save a backup* now and then.
 
 ## Putting it on your phone
+The app is hosted at **https://jjs-qerty.github.io/batumi-map/** (GitHub Pages from the `main` branch). Open that link on your phone and add it to your home screen:
+- iPhone (Safari): Share button, then **Add to Home Screen**.
+- Android (Chrome): menu, then **Install app** / **Add to Home screen**.
+
+### Hosting it somewhere else
 GPS only works when the app is opened from an `https://` address, so the folder needs to be hosted. The easiest free way:
 
 1. Download and unzip `niniko-map.zip` on a computer.
