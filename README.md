@@ -1,6 +1,6 @@
 # Niniko's Map
 
-A phone web app with a map of Batumi that remembers the streets you walked and the places where memories were made.
+A phone web app with a map of Batumi and Tbilisi that remembers the streets you walked and the places where memories were made.
 
 ## What it does
 - **Start walk / Finish walk** records your route with GPS and draws it in pink. Every walk stays on the map, so the streets you have walked fill in over time.

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Niniko's Map</title>
-  <meta name="description" content="A map of Batumi that remembers the streets you walked and the places where memories were made.">
+  <meta name="description" content="A map of Batumi and Tbilisi that remembers the streets you walked and the places where memories were made.">
   <meta name="theme-color" content="#0f4c5c">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
@@ -17,13 +17,13 @@
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
-  <div id="map" aria-label="Map of Batumi"></div>
+  <div id="map" aria-label="Map"></div>
 
   <header class="topbar">
-    <div class="brand">
-      <span class="brand-name">Niniko's Map <span class="brand-city">ბათუმი</span></span>
+    <button class="brand" id="brand" type="button">
+      <span class="brand-name">Niniko's Map <span class="brand-city"><span id="brandCity">ბათუმი</span> <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg></span></span>
       <span class="stats" id="stats" aria-live="polite"></span>
-    </div>
+    </button>
   </header>
 
   <div class="chips" id="chips" role="toolbar" aria-label="Show places on the map"></div>

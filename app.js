@@ -2,7 +2,14 @@
 (function () {
   'use strict';
 
-  const BATUMI = [41.6430, 41.6360]; // Old Boulevard / Europe Square area
+  // Cities the map knows. center is [lat, lng]; box is [south, west, north, east].
+  const CITIES = {
+    batumi: { name: 'Batumi', local: 'ბათუმი', center: [41.6430, 41.6360], box: [41.565, 41.555, 41.700, 41.720] },
+    tbilisi: { name: 'Tbilisi', local: 'თბილისი', center: [41.6925, 44.8030], box: [41.640, 44.700, 41.800, 44.920] },
+  };
+  const CITY_KEY = 'niniko.city';
+  let city = (() => { try { return CITIES[localStorage.getItem(CITY_KEY)] ? localStorage.getItem(CITY_KEY) : 'batumi'; } catch (e) { return 'batumi'; } })();
+  const inCity = (c, lat, lng) => { const b = CITIES[c].box; return lat >= b[0] && lat <= b[2] && lng >= b[1] && lng <= b[3]; };
   const MIN_STEP_M = 5;              // ignore GPS jitter smaller than this
   const AUTO_KEY = 'niniko.autoRecord';
   const AUTO_GAP_MS = 30 * 60000;    // a trail paused longer than this becomes its own walk
@@ -94,7 +101,7 @@
   // ---------- map ----------
   // Keep popups clear of the title, filter chips and bottom toolbar when they open.
   L.Popup.mergeOptions({ autoPanPaddingTopLeft: L.point(12, 170), autoPanPaddingBottomRight: L.point(12, 110) });
-  const map = L.map('map', { zoomControl: false, attributionControl: true }).setView(BATUMI, 15);
+  const map = L.map('map', { zoomControl: false, attributionControl: true }).setView(CITIES[city].center, 15);
   // Free map styles that need no key. "Bright" is the plain OpenStreetMap map in full colour.
   const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
   const BASEMAPS = {
@@ -318,8 +325,14 @@
 
   // ---------- location ----------
   let lastFix = null; // newest GPS position seen, so the photo button doesn't have to wait for a new one
+  let autoSwitched = false;
   function showMe(lat, lng, acc) {
     lastFix = { lat, lng, acc, at: Date.now() };
+    // First fix of the session in the other city: switch the map there.
+    if (!autoSwitched && !inCity(city, lat, lng)) {
+      const other = Object.keys(CITIES).find((c) => inCity(c, lat, lng));
+      if (other) { autoSwitched = true; setCity(other, false); toast(`You're in ${CITIES[other].name}, so the map switched there.`); }
+    }
     if (!meMarker) {
       meMarker = L.marker([lat, lng], { icon: L.divIcon({ className: '', html: '<div class="me-dot"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }), interactive: false, zIndexOffset: 1000 }).addTo(map);
       meCircle = L.circle([lat, lng], { radius: acc || 0, color: '#2f7cf6', weight: 1, opacity: 0.4, fillOpacity: 0.08, interactive: false }).addTo(map);
@@ -617,7 +630,7 @@
         <button class="btn" type="button" id="moreImport">Restore a backup</button>
       </div>
       <p class="note">Everything is kept on this phone only. Save a backup now and then so nothing is lost if the phone or browser is reset.</p>`);
-    openSheet('My Batumi', node);
+    openSheet('My map', node);
     const fill = () => {
       $('tabMem').setAttribute('aria-selected', listTab === 'memories'); $('tabWalk').setAttribute('aria-selected', listTab === 'walks');
       const ul = $('listItems'); ul.innerHTML = '';
@@ -664,11 +677,12 @@
   $('btnList').onclick = openList;
 
   function fitAll() {
-    const pts = [];
-    state.walks.forEach((w) => w.points.forEach((p) => pts.push([p[0], p[1]])));
-    state.memories.forEach((m) => pts.push([m.lat, m.lng]));
+    // Only what you saved in the current city, so the map doesn't zoom out across Georgia.
+    const pts = [], add = (lat, lng) => { if (inCity(city, lat, lng)) pts.push([lat, lng]); };
+    state.walks.forEach((w) => w.points.forEach((p) => add(p[0], p[1])));
+    state.memories.forEach((m) => add(m.lat, m.lng));
     if (pts.length) map.flyToBounds(L.latLngBounds(pts), { padding: [50, 50], maxZoom: 17 });
-    else map.flyTo(BATUMI, 15);
+    else map.flyTo(CITIES[city].center, 15);
   }
 
   // ---------- backup ----------
@@ -728,7 +742,31 @@
     startRecording(null, true);
   }
 
-  const places = NinikoPlaces.init(map, { onAddMemory: (latlng, name) => openMemoryForm(null, latlng, name), toast });
+  const places = NinikoPlaces.init(map, { city, onAddMemory: (latlng, name) => openMemoryForm(null, latlng, name), toast });
+
+  // ---------- cities ----------
+  function renderCity() {
+    $('brandCity').textContent = CITIES[city].local;
+    $('brand').setAttribute('aria-label', `${CITIES[city].name}. Change city`);
+    $('map').setAttribute('aria-label', `Map of ${CITIES[city].name}`);
+  }
+  function setCity(c, fly) {
+    if (!CITIES[c]) return;
+    city = c;
+    try { localStorage.setItem(CITY_KEY, c); } catch (e) { /* ignore */ }
+    renderCity();
+    places.setCity(c);
+    if (fly) map.setView(CITIES[c].center, 15); // the cities are far apart, so jump instead of a long fly
+  }
+  $('brand').onclick = () => {
+    if (state.mode !== 'idle') cancelMode();
+    const node = h(`<div class="city-list">${Object.entries(CITIES).map(([k, c]) =>
+      `<button type="button" class="city-btn${k === city ? ' on' : ''}" data-city="${k}"><b>${c.name}</b><span>${c.local}</span></button>`).join('')}</div>
+      <p class="note">Your walks and memories stay on the map in every city.</p>`);
+    openSheet('Choose a city', node);
+    node.querySelectorAll('[data-city]').forEach((b) => { b.onclick = () => { closeSheet(); setCity(b.dataset.city, true); }; });
+  };
+  renderCity();
 
   // ---------- map style ----------
   $('btnStyle').onclick = () => {

@@ -2,14 +2,17 @@
 (function () {
   'use strict';
 
-  // Batumi city, south (Gonio side) to north (Botanical Garden).
-  const BBOX = '41.565,41.555,41.700,41.720';
+  // Area searched for places in each city (south, west, north, east).
+  const BBOX = {
+    batumi: '41.565,41.555,41.700,41.720',  // Gonio to the Botanical Garden
+    tbilisi: '41.640,44.700,41.800,44.920', // Old Tbilisi, Vake, Saburtalo, Didube, Isani
+  };
   const OVERPASS = [
     'https://overpass-api.de/api/interpreter',
     'https://overpass.kumi.systems/api/interpreter',
     'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
   ];
-  const CACHE_KEY = 'niniko.places.v2'; // v2 keeps the wikidata/brand tags used to pick popular places
+  const CACHE_KEY = 'niniko.places.v2'; // + '.' + city for cities other than Batumi; v2 keeps the wikidata/brand tags
   const CACHE_DAYS = 7;
   const FILTER_KEY = 'niniko.placeFilters.v1';
   const POPULAR_KEY = 'niniko.popularOnly';
@@ -61,9 +64,10 @@
     return null;
   }
 
-  // ---------- ticket notes for Batumi's main paid places ----------
+  // ---------- ticket notes for each city's main paid places ----------
   // Prices are the last known adult prices and change often, so the popup always says to check.
-  const TICKETS = [
+  const TICKETS_BY_CITY = {};
+  TICKETS_BY_CITY.batumi = [
     { match: /alphabet/i, name: 'Alphabetic Tower', lat: 41.6563, lng: 41.6393, cat: 'sights', fee: true,
       price: 'about 10–15 GEL for the lift to the top', how: 'Buy at the ticket window at the foot of the tower. Cash and card are usually accepted.' },
     { match: /ali (and|&|და) nino|ალი და ნინო/i, name: 'Ali and Nino statue', lat: 41.6559, lng: 41.6398, cat: 'sights', fee: false,
@@ -88,6 +92,36 @@
       price: 'depends on the show, often 10–40 GEL', how: 'Buy at the theatre box office on Theatre Square or online on ' + TICKET_SITES + '.' },
   ];
 
+  TICKETS_BY_CITY.tbilisi = [
+    { match: /narikala|ნარიყალა/i, name: 'Narikala Fortress', lat: 41.6878, lng: 44.8085, cat: 'sights', fee: false,
+      how: 'Free to walk around, open all the time. Walk up from Old Tbilisi or take the cable car from Rike Park.' },
+    { match: /cable car|aerial tramway|საბაგირო/i, name: 'Rike Park – Narikala Cable Car', lat: 41.6921, lng: 44.8113, cat: 'sights', fee: true,
+      price: 'about 2.5 GEL per ride', how: 'Tap a bank card or a Metromoney transport card at the gate in Rike Park. No ticket to buy in advance.' },
+    { match: /funicular|ფუნიკულიორ/i, name: 'Mtatsminda Funicular', lat: 41.6950, lng: 44.7880, cat: 'sights', fee: true,
+      price: 'about 3 GEL one way', how: 'Buy a rechargeable park card at the lower station on Chonkadze Street. The same card pays for the rides in Mtatsminda Park.' },
+    { match: /mtatsminda.*park|მთაწმინდის პარკ/i, name: 'Mtatsminda Park', lat: 41.6943, lng: 44.7863, cat: 'parks', fee: false,
+      how: 'Free to enter. Rides are paid with the park card sold at the funicular and park ticket desks.' },
+    { match: /national museum|ეროვნული მუზეუმ|janashia|ჯანაშია/i, name: 'Georgian National Museum', lat: 41.6955, lng: 44.8007, cat: 'museums', fee: true,
+      price: 'about 15–20 GEL for visitors, extra for the Treasury', how: 'Buy at the desk on Rustaveli Avenue 3. Usually closed on Mondays.' },
+    { match: /sulfur|sulphur|abano|აბანო|chreli|ჭრელი/i, name: 'Sulphur Baths (Abanotubani)', lat: 41.6879, lng: 44.8104, cat: 'sights', fee: true,
+      price: 'public baths from about 10–30 GEL; private rooms roughly 50–200 GEL per hour', how: 'Private rooms are booked by the hour at each bathhouse (for example Chreli Abano). Call or book ahead for evenings and weekends.' },
+    { match: /bridge of peace|მშვიდობის ხიდ/i, name: 'Bridge of Peace', lat: 41.6930, lng: 44.8085, cat: 'sights', fee: false,
+      how: 'Free, open all the time. It lights up after dark.' },
+    { match: /sameba|holy trinity|სამება/i, name: 'Holy Trinity Cathedral (Sameba)', lat: 41.6975, lng: 44.8168, cat: 'sights', fee: false,
+      how: 'Free. Cover shoulders and knees; women usually cover their hair.' },
+    { match: /chronicles of georgia|საქართველოს მატიანე/i, name: 'Chronicles of Georgia', lat: 41.7746, lng: 44.8290, cat: 'sights', fee: false,
+      how: 'Free, open all the time. Best at sunset; it is on a hill by the Tbilisi Sea, so go by taxi.' },
+    { match: /botanical|ბოტანიკ/i, name: 'National Botanical Garden', lat: 41.6872, lng: 44.8050, cat: 'parks', fee: true,
+      price: 'about 6 GEL', how: 'Buy at the gate below Narikala. Card and cash.' },
+    { match: /opera|ოპერ/i, name: 'Tbilisi Opera and Ballet Theatre', lat: 41.6996, lng: 44.7962, cat: 'events', fee: true,
+      price: 'depends on the show, often 20–150 GEL', how: 'Buy at the box office on Rustaveli Avenue or online on ' + TICKET_SITES + '.' },
+    { match: /rustaveli.*theat|რუსთაველის.*თეატრ/i, name: 'Rustaveli Theatre', lat: 41.6988, lng: 44.7979, cat: 'events', fee: true,
+      price: 'depends on the show, often 10–60 GEL', how: 'Buy at the box office or online on ' + TICKET_SITES + '.' },
+    { match: /gabriadze|გაბრიაძ/i, name: 'Gabriadze Puppet Theatre', lat: 41.6963, lng: 44.8063, cat: 'events', fee: true,
+      price: 'about 30–50 GEL', how: 'Small hall that sells out, so book several days ahead at the box office in Old Tbilisi or online on ' + TICKET_SITES + '. The clock tower show outside is free.' },
+  ];
+  let TICKETS = TICKETS_BY_CITY.batumi;
+
     const CURATED_CATS = new Set(['sights', 'museums', 'galleries', 'events', 'parks']);
   function findCurated(p) {
     if (!CURATED_CATS.has(p.cat)) return null;
@@ -106,7 +140,7 @@
       return { needs: true, price: t.charge ? t.charge.replace(/;/g, ', ') : null,
         how: p.cat === 'events' ? 'Buy at the box office or online on ' + TICKET_SITES + '.' : 'Buy at the entrance.' };
     }
-    if (p.cat === 'museums' || p.cat === 'galleries') return { maybe: true, text: 'Most museums in Batumi charge a small entry fee (often 3–10 GEL), paid at the desk.' };
+    if (p.cat === 'museums' || p.cat === 'galleries') return { maybe: true, text: 'Most museums here charge a small entry fee (often 3–10 GEL), paid at the desk.' };
     if (p.cat === 'events') return { maybe: true, text: 'Tickets for shows and concerts are sold at the box office and online on ' + TICKET_SITES + '.' };
     return null;
   }
@@ -158,7 +192,7 @@
     return week;
   }
 
-  // Batumi is UTC+4 all year.
+  // Georgia (Batumi and Tbilisi) is UTC+4 all year.
   function batumiNow() {
     const t = new Date(Date.now() + 4 * 3600e3);
     return { day: (t.getUTCDay() + 6) % 7, min: t.getUTCHours() * 60 + t.getUTCMinutes() };
@@ -188,8 +222,8 @@
   function isOpenNow(raw) { const w = parseHours(raw); if (!w) return null; const n = batumiNow(); return isOpenAt(w, n.day, n.min); }
 
   // ---------- data ----------
-  function overpassQuery() {
-    const b = '(' + BBOX + ')';
+  function overpassQuery(city) {
+    const b = '(' + BBOX[city] + ')';
     return '[out:json][timeout:60];(' +
       `nwr[tourism~"^(museum|gallery|attraction|zoo|aquarium|theme_park)$"]${b};` +
       `nwr[amenity~"^(hospital|clinic|pharmacy|cafe|ice_cream|bar|pub|biergarten|restaurant|theatre|cinema|arts_centre|nightclub|events_venue|concert_hall)$"]${b};` +
@@ -211,12 +245,12 @@
     return out;
   }
 
-  async function fetchPlaces() {
+  async function fetchPlaces(city) {
     let lastErr;
     for (const url of OVERPASS) {
       try {
         const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), 45000);
-        const res = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(overpassQuery()),
+        const res = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(overpassQuery(city)),
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctrl.signal });
         clearTimeout(timer);
         if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -226,8 +260,9 @@
     throw lastErr;
   }
 
-  function readCache() { try { return JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); } catch (e) { return null; } }
-  function writeCache(items) { try { localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), items })); } catch (e) { /* full */ } }
+  const cacheKey = (city) => (city === 'batumi' ? CACHE_KEY : CACHE_KEY + '.' + city);
+  function readCache(city) { try { return JSON.parse(localStorage.getItem(cacheKey(city)) || 'null'); } catch (e) { return null; } }
+  function writeCache(city, items) { try { localStorage.setItem(cacheKey(city), JSON.stringify({ at: Date.now(), items })); } catch (e) { /* full */ } }
 
   // ---------- presentation ----------
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -365,13 +400,21 @@
       render();
     }
 
-    renderChips();
-    const cached = readCache();
-    if (cached && cached.items) setPlaces(cached.items); else setPlaces([]);
-    if (!cached || Date.now() - cached.at > CACHE_DAYS * 864e5) {
-      fetchPlaces().then((items) => { writeCache(items); setPlaces(items); })
-        .catch(() => { if (!cached) opts.toast && opts.toast('Could not load places right now. They will appear when you are online.'); });
+    // Load a city's places: from the phone's copy if it is recent, otherwise from OpenStreetMap.
+    let city = null;
+    function setCity(c) {
+      if (!BBOX[c] || c === city) return;
+      city = c; TICKETS = TICKETS_BY_CITY[c] || [];
+      const cached = readCache(c);
+      setPlaces(cached && cached.items ? cached.items : []);
+      if (!cached || Date.now() - cached.at > CACHE_DAYS * 864e5) {
+        fetchPlaces(c).then((items) => { writeCache(c, items); if (city === c) setPlaces(items); })
+          .catch(() => { if (!cached && city === c) opts.toast && opts.toast('Could not load places right now. They will appear when you are online.'); });
+      }
     }
+
+    renderChips();
+    setCity(opts.city || 'batumi');
     // Refresh open/closed filtering every few minutes.
     setInterval(() => { if (openOnly) render(); }, 5 * 60000);
     // Popular places within r metres of a spot, nearest first (used to name a photo memory).
@@ -380,7 +423,7 @@
       const dist = (p) => { const x = (p.lng - lng) * rad * Math.cos(lat * rad), y = (p.lat - lat) * rad; return Math.sqrt(x * x + y * y) * R; };
       return places.filter((p) => p.popular).map((p) => [dist(p), p]).filter(([d]) => d <= r).sort((a, b) => a[0] - b[0]).map(([, p]) => p);
     }
-    return { render, near };
+    return { render, near, setCity };
   }
 
   window.NinikoPlaces = { init, _test: { parseHours, openStatus, isOpenAt } };
