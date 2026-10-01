@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Niniko's Map</title>
+  <meta name="description" content="A map of Batumi that remembers the streets you walked and the places where memories were made.">
+  <meta name="theme-color" content="#0f4c5c">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Niniko's Map">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="vendor/leaflet.css">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div id="map" aria-label="Map of Batumi"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-name">Niniko's Map</span>
+      <span class="brand-sub">ბათუმი · Batumi</span>
+    </div>
+    <div class="stats" id="stats" aria-live="polite"></div>
+  </header>
+
+  <!-- Shown while recording a walk -->
+  <div class="rec-banner" id="recBanner" hidden>
+    <span class="rec-dot" aria-hidden="true"></span>
+    <span id="recText">Recording</span>
+    <span class="rec-meta" id="recMeta">0 m · 0:00</span>
+  </div>
+
+  <!-- Shown while picking a spot or drawing a walk -->
+  <div class="hint" id="hint" hidden>
+    <span id="hintText"></span>
+    <div class="hint-actions" id="hintActions"></div>
+  </div>
+
+  <nav class="toolbar" aria-label="Main actions">
+    <button class="tool" id="btnList" type="button" aria-label="My walks and memories">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+      <span>My map</span>
+    </button>
+    <button class="tool tool-rec" id="btnRec" type="button">
+      <span class="rec-ring" aria-hidden="true"><span class="rec-core"></span></span>
+      <span id="btnRecLabel">Start walk</span>
+    </button>
+    <button class="tool" id="btnMemory" type="button" aria-label="Add a memory">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><path d="M12 7v5M9.5 9.5h5"/></svg>
+      <span>Memory</span>
+    </button>
+  </nav>
+
+  <button class="locate" id="btnLocate" type="button" aria-label="Show where I am">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7.5"/></svg>
+  </button>
+
+  <!-- Bottom sheet used for lists and forms -->
+  <div class="scrim" id="scrim" hidden></div>
+  <section class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" hidden>
+    <div class="sheet-grip" aria-hidden="true"></div>
+    <div class="sheet-head">
+      <h2 id="sheetTitle"></h2>
+      <button class="icon-btn" id="sheetClose" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="sheet-body" id="sheetBody"></div>
+  </section>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+  <input type="file" id="importFile" accept="application/json,.json" hidden>
+
+  <script src="vendor/leaflet.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
