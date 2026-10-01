@@ -48,6 +48,11 @@ button { font: inherit; color: inherit; }
 
 #map { position: fixed; inset: 0; background: var(--surface-2); }
 .leaflet-container { font-family: var(--font); }
+/* Softer, calmer basemap: fewer saturated colours so walks, pins and places stand out. */
+:root { --tiles: saturate(0.45) brightness(1.05) contrast(0.92); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --tiles: invert(1) hue-rotate(180deg) saturate(0.35) brightness(0.9) contrast(0.88); } }
+:root[data-theme="dark"] { --tiles: invert(1) hue-rotate(180deg) saturate(0.35) brightness(0.9) contrast(0.88); }
+.base-tiles { filter: var(--tiles); }
 .picking #map { cursor: crosshair; }
 
 /* Top chips */

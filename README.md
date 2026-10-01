@@ -35,4 +35,4 @@ GitHub Pages works too and is free; it needs a GitHub repository.
 - Recording in the background with the screen off would need a native iPhone/Android app.
 
 ## Files
-`index.html`, `app.css`, `app.js` (the app), `poi.js` (places, opening hours, ticket notes), `sw.js` (offline support and map tile caching), `manifest.webmanifest` and `icons/` (home-screen install), `vendor/` (Leaflet 1.9.4 map library). Map data © OpenStreetMap contributors, map style © CARTO, places via the Overpass API.
+`index.html`, `app.css`, `app.js` (the app), `poi.js` (places, opening hours, ticket notes), `sw.js` (offline support and map tile caching), `manifest.webmanifest` and `icons/` (home-screen install), `vendor/` (Leaflet 1.9.4 map library). Map data © OpenStreetMap contributors, places via the Overpass API.

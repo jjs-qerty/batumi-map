@@ -91,27 +91,13 @@
   // Keep popups clear of the title, filter chips and bottom toolbar when they open.
   L.Popup.mergeOptions({ autoPanPaddingTopLeft: L.point(12, 170), autoPanPaddingBottomRight: L.point(12, 110) });
   const map = L.map('map', { zoomControl: false, attributionControl: true }).setView(BATUMI, 15);
-  // Soft CARTO basemap (OpenStreetMap data): Voyager by day, Dark Matter when the phone is in dark mode.
+  // OpenStreetMap tiles (free, no key). app.css softens their colours, and darkens them in dark mode.
   const darkQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
-  const isDark = () => document.documentElement.dataset.theme === 'dark' || (document.documentElement.dataset.theme !== 'light' && darkQuery && darkQuery.matches);
-  const baseUrl = () => `https://{s}.basemaps.cartocdn.com/${isDark() ? 'dark_all' : 'rastertiles/voyager'}/{z}/{x}/{y}{r}.png`;
-  const OSM_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-  const base = L.tileLayer(baseUrl(), {
-    maxZoom: 20, subdomains: 'abcd',
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, className: 'base-tiles',
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   }).addTo(map);
-  // If the soft map can't load on this phone, fall back to the standard OpenStreetMap tiles.
-  let tilesLoaded = 0, tileErrors = 0, usingOsm = false;
-  base.on('tileload', () => { tilesLoaded++; });
-  base.on('tileerror', () => {
-    tileErrors++;
-    if (!usingOsm && tilesLoaded === 0 && tileErrors >= 3) {
-      usingOsm = true;
-      base.options.maxZoom = 19;
-      base.setUrl(OSM_URL);
-    }
-  });
-  if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change', () => { if (!usingOsm) base.setUrl(baseUrl()); renderAll(); });
+  if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change', () => renderAll());
 
   const walkColor = () => getComputedStyle(document.documentElement).getPropertyValue('--walk').trim() || '#e8456b';
   const walkStyle = () => ({ color: walkColor(), weight: 6, opacity: 0.6, lineCap: 'round', lineJoin: 'round' });
