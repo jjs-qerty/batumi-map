@@ -139,8 +139,13 @@
     usingFallback = true; styleReady = false;
     map.setStyle(FALLBACK_STYLE);
   }
-  map.on('error', () => { if (!styleReady) useFallback(); });
-  setTimeout(() => { if (!styleReady) useFallback(); }, 12000);
+  // Only a failure of the style itself counts; a missing sprite, font or single tile shouldn't swap the map.
+  map.on('error', (e) => {
+    if (styleReady || usingFallback) return;
+    const msg = String((e && e.error && (e.error.url || e.error.message)) || '');
+    if (!msg || msg.includes('styles/') || /style/i.test(msg)) useFallback();
+  });
+  setTimeout(() => { if (!styleReady) useFallback(); }, 20000);
 
   // Overlay data is kept here so it survives a style switch.
   const geo = {};
@@ -232,7 +237,8 @@
   let memoryMarkers = [], pinMarkers = [];
 
   function renderStats() {
-    const km = state.walks.reduce((s, w) => s + (w.distance || 0), 0);
+    let km = state.walks.reduce((s, w) => s + (w.distance || 0), 0);
+    if (state.recording) km += pathLength(state.recording.points);
     $('stats').innerHTML = `<span class="sw" style="background:${walkColor()}"></span><b>${fmtDist(km)}</b> walked · <b>${state.memories.length}</b> ${state.memories.length === 1 ? 'memory' : 'memories'}`;
   }
 
@@ -517,6 +523,7 @@
   function updateRecBanner() {
     if (!state.recording) return;
     $('recMeta').textContent = `${fmtDist(pathLength(state.recording.points))} · ${fmtDur(Date.now() - state.recording.startedAt)}`;
+    renderStats();
   }
   let recTick = null;
 

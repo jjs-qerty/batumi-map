@@ -1,6 +1,6 @@
 # Niniko's Map
 
-A phone web app with a map of Batumi that remembers the streets you walked and the places where memories were made.
+A phone web app with a map of Batumi and Tbilisi that remembers the streets you walked and the places where memories were made.
 
 ## What it does
 - **Batumi and Tbilisi**: tap the title to switch city. Each city has its own places and ticket notes; the map also switches by itself when your location is in the other city. Your walks, memories and pins show in both.

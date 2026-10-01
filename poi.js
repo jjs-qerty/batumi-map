@@ -331,6 +331,7 @@
   function init(map, opts) {
     let places = [];
     const shown = new Map(); // id -> marker
+    const MAX_MARKERS = 250;
     let filters;
     try { filters = JSON.parse(localStorage.getItem(FILTER_KEY) || 'null'); } catch (e) { filters = null; }
     if (!filters) filters = Object.fromEntries(CATS.map((c) => [c.key, c.on]));
@@ -368,9 +369,12 @@
       const z = map.getZoom();
       const b = map.getBounds(), padLng = (b.getEast() - b.getWest()) * 0.3, padLat = (b.getNorth() - b.getSouth()) * 0.3;
       const bounds = new maplibregl.LngLatBounds([b.getWest() - padLng, b.getSouth() - padLat], [b.getEast() + padLng, b.getNorth() + padLat]);
+      // Too many DOM markers make a phone stutter, so keep the ones nearest the middle of the screen.
+      const c = map.getCenter(), cos = Math.cos(c.lat * Math.PI / 180);
+      const d2 = (p) => ((p.lng - c.lng) * cos) ** 2 + (p.lat - c.lat) ** 2;
+      const list = places.filter((p) => wanted(p, z, bounds)).sort((a, b) => d2(a) - d2(b)).slice(0, MAX_MARKERS);
       const keep = new Set();
-      for (const p of places) {
-        if (!wanted(p, z, bounds)) continue;
+      for (const p of list) {
         keep.add(p.id);
         if (!shown.has(p.id)) shown.set(p.id, opts.marker(p.lat, p.lng, markerEl(p), () => openPlace(p), 'center'));
       }
