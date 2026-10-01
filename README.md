@@ -3,6 +3,7 @@
 A phone web app with a map of Batumi that remembers the streets you walked and the places where memories were made.
 
 ## What it does
+- **Batumi and Tbilisi**: tap the title to switch city. Each city has its own places and ticket notes; the map also switches by itself when your location is in the other city. Your walks, memories and pins show in both.
 - **Calm map with 3D**: a light OpenFreeMap vector map (Positron style). The **3D** button tilts the map and raises the buildings. If that map can't load, the app falls back to plain OpenStreetMap tiles.
 - **Start walk / Finish** records your route with GPS. With *Record my trail whenever the app is open* (in **My map**) it starts by itself. Tap any point of a trail to see when you were there.
 - **Photo** opens the camera. The photo is saved to the memory you're standing at (within 30 m), or starts a new memory there, named after the nearest place.
@@ -34,7 +35,7 @@ GitHub Pages works too and is free; it needs a GitHub repository.
 ## Android app (records with the screen off)
 Download **https://github.com/jjs-qerty/batumi-map/releases/download/android/niniko-map.apk** on the phone and open it. Android asks once to allow installing apps from your browser. The app records your trail through a background service, so it keeps going when the screen is locked; a notification shows while it records.
 
-Every push to `main` rebuilds the APK (`.github/workflows/android.yml`, `native/build-android.sh`) and replaces it in the `android` release. Installing a newer APK over the old one keeps your data, because every build is signed with the same key (`native/niniko.keystore`).
+The Android app is paused for now. Running the *Android app* workflow by hand rebuilds the APK (`.github/workflows/android.yml`, `native/build-android.sh`) and replaces it in the `android` release. Installing a newer APK over the old one keeps your data, because every build is signed with the same key (`native/niniko.keystore`).
 
 The web app and the Android app keep separate data. To move walks and memories across, use *Save a backup* in one and *Restore a backup* in the other.
 

@@ -1,8 +1,7 @@
 name: Android app
 
+# Paused: runs only when started by hand from the Actions tab.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:

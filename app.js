@@ -2,7 +2,14 @@
 (function () {
   'use strict';
 
-  const BATUMI = [41.6430, 41.6360]; // Old Boulevard / Europe Square area, [lat, lng]
+  // Cities the map knows. center is [lat, lng]; box is [south, west, north, east].
+  const CITIES = {
+    batumi: { name: 'Batumi', local: 'ბათუმი', center: [41.6430, 41.6360], box: [41.565, 41.555, 41.700, 41.720] },
+    tbilisi: { name: 'Tbilisi', local: 'თბილისი', center: [41.6925, 44.8030], box: [41.640, 44.700, 41.800, 44.920] },
+  };
+  const CITY_KEY = 'niniko.city';
+  let city = (() => { try { return CITIES[localStorage.getItem(CITY_KEY)] ? localStorage.getItem(CITY_KEY) : 'batumi'; } catch (e) { return 'batumi'; } })();
+  const inCity = (c, lat, lng) => { const b = CITIES[c].box; return lat >= b[0] && lat <= b[2] && lng >= b[1] && lng <= b[3]; };
   const STYLE_URL = 'https://tiles.openfreemap.org/styles/positron'; // free, no key, light and calm
   const FALLBACK_STYLE = {
     version: 8,
@@ -120,7 +127,7 @@
 
   // ---------- map ----------
   const map = new maplibregl.Map({
-    container: 'map', style: STYLE_URL, center: ll(BATUMI), zoom: 14, maxPitch: 70,
+    container: 'map', style: STYLE_URL, center: ll(CITIES[city].center), zoom: 14, maxPitch: 70,
     attributionControl: { compact: true }, dragRotate: true, pitchWithRotate: true,
   });
   map.touchZoomRotate.enableRotation();
@@ -369,7 +376,13 @@
 
   // ---------- location ----------
   let meMarker = null;
+  let autoSwitched = false;
   function showMe(lat, lng) {
+    // First fix of the session in the other city: switch to it.
+    if (!autoSwitched && !inCity(city, lat, lng)) {
+      const other = Object.keys(CITIES).find((c) => inCity(c, lat, lng));
+      if (other) { autoSwitched = true; setCity(other, false); toast(`You're in ${CITIES[other].name}, so the map switched there.`); }
+    }
     if (!meMarker) {
       const el = document.createElement('div'); el.className = 'me-dot';
       meMarker = new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat([lng, lat]).addTo(map);
@@ -446,6 +459,29 @@
       map.flyTo({ center: [f.lng, f.lat], zoom: Math.max(map.getZoom(), 15.5) });
     } catch (e) { toast(geoError(e), 4000); }
   };
+
+  // ---------- cities ----------
+  function renderCity() {
+    $('brandCity').textContent = CITIES[city].local;
+    $('brand').setAttribute('aria-label', `${CITIES[city].name}. Change city`);
+  }
+  function setCity(c, fly) {
+    if (!CITIES[c]) return;
+    const changed = c !== city;
+    city = c;
+    try { localStorage.setItem(CITY_KEY, c); } catch (e) { /* ignore */ }
+    renderCity();
+    if (changed && places) places.setCity(c);
+    if (fly) map.flyTo({ center: ll(CITIES[c].center), zoom: 14, pitch: state.threeD ? 60 : 0 });
+  }
+  $('brand').onclick = () => {
+    const node = h(`<div class="city-list">${Object.entries(CITIES).map(([k, c]) =>
+      `<button type="button" class="city-btn${k === city ? ' on' : ''}" data-city="${k}"><b>${c.name}</b><span>${c.local}</span></button>`).join('')}</div>
+      <p class="note">Your walks, memories and pins stay on the map in every city.</p>`);
+    openSheet('Choose a city', node);
+    node.querySelectorAll('[data-city]').forEach((b) => { b.onclick = () => { closeSheet(); setCity(b.dataset.city, true); }; });
+  };
+  renderCity();
 
   // ---------- 3D ----------
   function set3d(on) {
@@ -1021,12 +1057,13 @@
   }
   $('btnList').onclick = openList;
 
+  // Show everything you've saved in the current city.
   function fitAll() {
-    const pts = [];
-    state.walks.forEach((w) => w.points.forEach((p) => pts.push(ll(p))));
-    state.memories.forEach((m) => pts.push([m.lng, m.lat]));
-    state.pins.forEach((p) => pts.push([p.lng, p.lat]));
-    if (!pts.length) { map.flyTo({ center: ll(BATUMI), zoom: 14 }); return; }
+    const pts = [], add = (lat, lng) => { if (inCity(city, lat, lng)) pts.push([lng, lat]); };
+    state.walks.forEach((w) => w.points.forEach((p) => add(p[0], p[1])));
+    state.memories.forEach((m) => add(m.lat, m.lng));
+    state.pins.forEach((p) => add(p.lat, p.lng));
+    if (!pts.length) { map.flyTo({ center: ll(CITIES[city].center), zoom: 14 }); return; }
     const b = new maplibregl.LngLatBounds(pts[0], pts[0]);
     pts.forEach((p) => b.extend(p));
     map.fitBounds(b, { padding: { top: 180, bottom: 120, left: 50, right: 50 }, maxZoom: 16 });
@@ -1103,7 +1140,7 @@
   }
 
   const places = NinikoPlaces.init(map, {
-    marker, openPopup, closePopup, toast,
+    city, marker, openPopup, closePopup, toast,
     onAddMemory: (pos, name) => openMemoryForm(null, pos, name),
     onDirections: (dest) => navigateTo(dest),
   });

@@ -2,14 +2,17 @@
 (function () {
   'use strict';
 
-  // Batumi city, south (Gonio side) to north (Botanical Garden).
-  const BBOX = '41.565,41.555,41.700,41.720';
+  // Area searched for places in each city (south, west, north, east).
+  const BBOX = {
+    batumi: '41.565,41.555,41.700,41.720',  // Gonio to the Botanical Garden
+    tbilisi: '41.640,44.700,41.800,44.920', // Old Tbilisi, Vake, Saburtalo, Didube, Isani
+  };
   const OVERPASS = [
     'https://overpass-api.de/api/interpreter',
     'https://overpass.kumi.systems/api/interpreter',
     'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
   ];
-  const CACHE_KEY = 'niniko.places.v1';
+  const CACHE_KEY = 'niniko.places.v1'; // + '.' + city for cities other than Batumi
   const CACHE_DAYS = 7;
   const FILTER_KEY = 'niniko.placeFilters.v1';
   const TICKET_SITES = '<a href="https://tkt.ge" target="_blank" rel="noopener">tkt.ge</a> or <a href="https://biletebi.ge" target="_blank" rel="noopener">biletebi.ge</a>';
@@ -59,9 +62,10 @@
     return null;
   }
 
-  // ---------- ticket notes for Batumi's main paid places ----------
+  // ---------- ticket notes for each city's main paid places ----------
   // Prices are the last known adult prices and change often, so the popup always says to check.
-  const TICKETS = [
+  const TICKETS_BY_CITY = {};
+  TICKETS_BY_CITY.batumi = [
     { match: /alphabet/i, name: 'Alphabetic Tower', lat: 41.6563, lng: 41.6393, cat: 'sights', fee: true,
       price: 'about 10–15 GEL for the lift to the top', how: 'Buy at the ticket window at the foot of the tower. Cash and card are usually accepted.' },
     { match: /ali (and|&|და) nino|ალი და ნინო/i, name: 'Ali and Nino statue', lat: 41.6559, lng: 41.6398, cat: 'sights', fee: false,
@@ -85,6 +89,35 @@
     { match: /drama|ილია ჭავჭავაძის|chavchavadze.*theat/i, name: 'Batumi Drama Theatre', lat: 41.6491, lng: 41.6364, cat: 'events', fee: true,
       price: 'depends on the show, often 10–40 GEL', how: 'Buy at the theatre box office on Theatre Square or online on ' + TICKET_SITES + '.' },
   ];
+  TICKETS_BY_CITY.tbilisi = [
+    { match: /narikala|ნარიყალა/i, name: 'Narikala Fortress', lat: 41.6878, lng: 44.8085, cat: 'sights', fee: false,
+      how: 'Free to walk around, open all the time. Walk up from Old Tbilisi or take the cable car from Rike Park.' },
+    { match: /cable car|aerial tramway|საბაგირო/i, name: 'Rike Park – Narikala Cable Car', lat: 41.6921, lng: 44.8113, cat: 'sights', fee: true,
+      price: 'about 2.5 GEL per ride', how: 'Tap a bank card or a Metromoney transport card at the gate in Rike Park. No ticket to buy in advance.' },
+    { match: /funicular|ფუნიკულიორ/i, name: 'Mtatsminda Funicular', lat: 41.6950, lng: 44.7880, cat: 'sights', fee: true,
+      price: 'about 3 GEL one way', how: 'Buy a rechargeable park card at the lower station on Chonkadze Street. The same card pays for the rides in Mtatsminda Park.' },
+    { match: /mtatsminda.*park|მთაწმინდის პარკ/i, name: 'Mtatsminda Park', lat: 41.6943, lng: 44.7863, cat: 'parks', fee: false,
+      how: 'Free to enter. Rides are paid with the park card sold at the funicular and park ticket desks.' },
+    { match: /national museum|ეროვნული მუზეუმ|janashia|ჯანაშია/i, name: 'Georgian National Museum', lat: 41.6955, lng: 44.8007, cat: 'museums', fee: true,
+      price: 'about 15–20 GEL for visitors, extra for the Treasury', how: 'Buy at the desk on Rustaveli Avenue 3. Usually closed on Mondays.' },
+    { match: /sulfur|sulphur|abano|აბანო|chreli|ჭრელი/i, name: 'Sulphur Baths (Abanotubani)', lat: 41.6879, lng: 44.8104, cat: 'sights', fee: true,
+      price: 'public baths from about 10–30 GEL; private rooms roughly 50–200 GEL per hour', how: 'Private rooms are booked by the hour at each bathhouse (for example Chreli Abano). Call or book ahead for evenings and weekends.' },
+    { match: /bridge of peace|მშვიდობის ხიდ/i, name: 'Bridge of Peace', lat: 41.6930, lng: 44.8085, cat: 'sights', fee: false,
+      how: 'Free, open all the time. It lights up after dark.' },
+    { match: /sameba|holy trinity|სამება/i, name: 'Holy Trinity Cathedral (Sameba)', lat: 41.6975, lng: 44.8168, cat: 'sights', fee: false,
+      how: 'Free. Cover shoulders and knees; women usually cover their hair.' },
+    { match: /chronicles of georgia|საქართველოს მატიანე/i, name: 'Chronicles of Georgia', lat: 41.7746, lng: 44.8290, cat: 'sights', fee: false,
+      how: 'Free, open all the time. Best at sunset; it is on a hill by the Tbilisi Sea, so go by taxi.' },
+    { match: /botanical|ბოტანიკ/i, name: 'National Botanical Garden', lat: 41.6872, lng: 44.8050, cat: 'parks', fee: true,
+      price: 'about 6 GEL', how: 'Buy at the gate below Narikala. Card and cash.' },
+    { match: /opera|ოპერ/i, name: 'Tbilisi Opera and Ballet Theatre', lat: 41.6996, lng: 44.7962, cat: 'events', fee: true,
+      price: 'depends on the show, often 20–150 GEL', how: 'Buy at the box office on Rustaveli Avenue or online on ' + TICKET_SITES + '.' },
+    { match: /rustaveli.*theat|რუსთაველის.*თეატრ/i, name: 'Rustaveli Theatre', lat: 41.6988, lng: 44.7979, cat: 'events', fee: true,
+      price: 'depends on the show, often 10–60 GEL', how: 'Buy at the box office or online on ' + TICKET_SITES + '.' },
+    { match: /gabriadze|გაბრიაძ/i, name: 'Gabriadze Puppet Theatre', lat: 41.6963, lng: 44.8063, cat: 'events', fee: true,
+      price: 'about 30–50 GEL', how: 'Small hall that sells out, so book several days ahead at the box office in Old Tbilisi or online on ' + TICKET_SITES + '. The clock tower show outside is free.' },
+  ];
+  let TICKETS = TICKETS_BY_CITY.batumi;
 
     const CURATED_CATS = new Set(['sights', 'museums', 'galleries', 'events', 'parks']);
   function findCurated(p) {
@@ -186,8 +219,8 @@
   function isOpenNow(raw) { const w = parseHours(raw); if (!w) return null; const n = batumiNow(); return isOpenAt(w, n.day, n.min); }
 
   // ---------- data ----------
-  function overpassQuery() {
-    const b = '(' + BBOX + ')';
+  function overpassQuery(city) {
+    const b = '(' + BBOX[city] + ')';
     return '[out:json][timeout:60];(' +
       `nwr[tourism~"^(museum|gallery|attraction|zoo|aquarium|theme_park)$"]${b};` +
       `nwr[amenity~"^(hospital|clinic|pharmacy|cafe|ice_cream|bar|pub|biergarten|restaurant|theatre|cinema|arts_centre|nightclub|events_venue|concert_hall)$"]${b};` +
@@ -209,12 +242,12 @@
     return out;
   }
 
-  async function fetchPlaces() {
+  async function fetchPlaces(city) {
     let lastErr;
     for (const url of OVERPASS) {
       try {
         const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), 45000);
-        const res = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(overpassQuery()),
+        const res = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(overpassQuery(city)),
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctrl.signal });
         clearTimeout(timer);
         if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -224,13 +257,16 @@
     throw lastErr;
   }
 
-  function readCache() { try { return JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); } catch (e) { return null; } }
-  function writeCache(items) { try { localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), items })); } catch (e) { /* full */ } }
+  const cacheKey = (city) => (city === 'batumi' ? CACHE_KEY : CACHE_KEY + '.' + city);
+  function readCache(city) { try { return JSON.parse(localStorage.getItem(cacheKey(city)) || 'null'); } catch (e) { return null; } }
+  function writeCache(city, items) { try { localStorage.setItem(cacheKey(city), JSON.stringify({ at: Date.now(), items })); } catch (e) { /* full */ } }
 
   // ---------- visited ----------
   const VISITED_KEY = 'niniko.visited.v1';
   let visited = {};
   try { visited = JSON.parse(localStorage.getItem(VISITED_KEY) || '{}') || {}; } catch (e) { visited = {}; }
+  // Each entry is the time it was marked, plus enough to list it from another city.
+  const visitedAt = (v) => (typeof v === 'number' ? v : v && v.at);
   const saveVisited = () => { try { localStorage.setItem(VISITED_KEY, JSON.stringify(visited)); } catch (e) { /* full */ } };
 
   // ---------- presentation ----------
@@ -267,7 +303,7 @@
     else if (t.opening_hours) status = '<span class="pill">Check hours below</span>';
     else if (p.cat !== 'parks' && !findCurated(p)) status = '<span class="pill">Hours not listed</span>';
     const v = visited[p.id];
-    const visitTag = v ? `<span class="pill pill-visited">Visited · ${esc(fmtDay(v))}</span>` : '<span class="pill pill-new">Not visited yet</span>';
+    const visitTag = v ? `<span class="pill pill-visited">Visited · ${esc(fmtDay(visitedAt(v)))}</span>` : '<span class="pill pill-new">Not visited yet</span>';
     let ticket = '';
     if (tk) {
       if (tk.needs) {
@@ -347,7 +383,7 @@
     }
 
     function setVisited(p, on) {
-      if (on) visited[p.id] = Date.now(); else delete visited[p.id];
+      if (on) visited[p.id] = { at: Date.now(), name: p.name, lat: p.lat, lng: p.lng, cat: p.cat }; else delete visited[p.id];
       saveVisited(); refreshMarker(p);
     }
 
@@ -376,17 +412,25 @@
       render();
     }
 
-    renderChips();
-    const cached = readCache();
-    if (cached && cached.items) setPlaces(cached.items); else setPlaces([]);
-    if (!cached || Date.now() - cached.at > CACHE_DAYS * 864e5) {
-      fetchPlaces().then((items) => { writeCache(items); setPlaces(items); })
-        .catch(() => { if (!cached) opts.toast && opts.toast('Could not load places right now. They will appear when you are online.'); });
+    let city = null;
+    function setCity(c) {
+      if (c === city || !BBOX[c]) return;
+      city = c; TICKETS = TICKETS_BY_CITY[c];
+      const cached = readCache(c);
+      setPlaces(cached && cached.items ? cached.items : []);
+      if (!cached || Date.now() - cached.at > CACHE_DAYS * 864e5) {
+        fetchPlaces(c).then((items) => { writeCache(c, items); if (city === c) setPlaces(items); })
+          .catch(() => { if (!cached && city === c) opts.toast && opts.toast('Could not load places right now. They will appear when you are online.'); });
+      }
     }
+
+    renderChips();
+    setCity(opts.city || 'batumi');
     setInterval(() => { if (openOnly) render(); }, 5 * 60000);
 
     return {
       render,
+      setCity,
       // Places within `m` metres of a point, nearest first.
       near(lat, lng, m) {
         const out = [];
@@ -399,7 +443,10 @@
       },
       markVisited(id) { const p = places.find((x) => x.id === id); if (p && !visited[p.id]) { setVisited(p, true); return p; } return null; },
       visitedList() {
-        return Object.entries(visited).map(([id, at]) => ({ at, p: places.find((x) => x.id === id) })).filter((x) => x.p).sort((a, b) => b.at - a.at);
+        return Object.entries(visited).map(([id, v]) => {
+          const p = places.find((x) => x.id === id) || (v && v.name ? { id, name: v.name, lat: v.lat, lng: v.lng, cat: v.cat || 'sights', alt: '', tags: { name: v.name } } : null);
+          return { at: visitedAt(v), p };
+        }).filter((x) => x.p).sort((a, b) => b.at - a.at);
       },
       open: openPlace,
       exportVisited: () => ({ ...visited }),
