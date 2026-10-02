@@ -317,6 +317,7 @@
       ${m.note ? `<p>${esc(m.note)}</p>` : ''}
       <div class="row"><button class="btn btn-sm" data-act="edit">Edit</button>
       <button class="btn btn-sm" data-act="photo">+ Photo</button>
+      ${photosOf(m).length ? '<button class="btn btn-sm" data-act="download">Download</button>' : ''}
       <button class="btn btn-sm btn-danger" data-act="delete">Delete</button></div></div>`;
   }
   function galleryHtml(list) {
@@ -328,6 +329,8 @@
     const el = popup.getElement();
     el.querySelector('[data-act="edit"]').onclick = () => { map.closePopup(); openMemoryForm(m); };
     el.querySelector('[data-act="photo"]').onclick = () => { map.closePopup(); takePhotoFor(m); };
+    const dl = el.querySelector('[data-act="download"]');
+    if (dl) dl.onclick = () => downloadPhotos([m], `${m.date || todayISO()} ${safeName(m.title)}.zip`);
     armDelete(el.querySelector('[data-act="delete"]'), async () => {
       await store.del('memories', m.id);
       state.memories = state.memories.filter((x) => x.id !== m.id);
@@ -664,6 +667,59 @@
     };
   }
 
+  // ---------- downloading photos ----------
+  function dataUrlToBytes(url) {
+    const bin = atob(url.slice(url.indexOf(',') + 1)), out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  const safeName = (s) => String(s || 'memory').replace(/[\\/:*?"<>|\n\r]+/g, '-').trim().slice(0, 60) || 'memory';
+  // File names like "2026-10-02 Coffeesta 2.jpg", so photos sort by day in the gallery or Downloads.
+  function photoFiles(m) {
+    const list = photosOf(m), base = `${m.date || todayISO()} ${safeName(m.title)}`;
+    return list.map((src, i) => ({ name: list.length > 1 ? `${base} ${i + 1}.jpg` : `${base}.jpg`, bytes: dataUrlToBytes(src) }));
+  }
+  const CRC_TABLE = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+  function crc32(b) { let c = 0xffffffff; for (let i = 0; i < b.length; i++) c = CRC_TABLE[(c ^ b[i]) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; }
+  // A plain .zip (photos are already compressed, so files are stored as they are).
+  function makeZip(files) {
+    const enc = new TextEncoder(), parts = [], central = []; let offset = 0;
+    const seen = new Map();
+    for (const f of files) {
+      let name = f.name; const n = seen.get(name) || 0; seen.set(name, n + 1);
+      if (n) name = name.replace(/\.jpg$/, ` (${n + 1}).jpg`);
+      const nm = enc.encode(name), crc = crc32(f.bytes), size = f.bytes.length;
+      const head = new DataView(new ArrayBuffer(30));
+      [[0, 0x04034b50, 4], [4, 20, 2], [6, 0x0800, 2], [8, 0, 2], [10, 0, 2], [12, 0x21, 2], [14, crc, 4], [18, size, 4], [22, size, 4], [26, nm.length, 2], [28, 0, 2]]
+        .forEach(([o, v, l]) => (l === 4 ? head.setUint32(o, v, true) : head.setUint16(o, v, true)));
+      const cen = new DataView(new ArrayBuffer(46));
+      [[0, 0x02014b50, 4], [4, 20, 2], [6, 20, 2], [8, 0x0800, 2], [10, 0, 2], [12, 0, 2], [14, 0x21, 2], [16, crc, 4], [20, size, 4], [24, size, 4], [28, nm.length, 2], [30, 0, 2], [32, 0, 2], [34, 0, 2], [36, 0, 2], [38, 0, 4], [42, offset, 4]]
+        .forEach(([o, v, l]) => (l === 4 ? cen.setUint32(o, v, true) : cen.setUint16(o, v, true)));
+      parts.push(head, nm, f.bytes); central.push(cen, nm);
+      offset += 30 + nm.length + size;
+    }
+    const cenSize = central.reduce((s, x) => s + x.byteLength, 0), end = new DataView(new ArrayBuffer(22));
+    [[0, 0x06054b50, 4], [4, 0, 2], [6, 0, 2], [8, files.length, 2], [10, files.length, 2], [12, cenSize, 4], [16, offset, 4], [20, 0, 2]]
+      .forEach(([o, v, l]) => (l === 4 ? end.setUint32(o, v, true) : end.setUint16(o, v, true)));
+    return new Blob([...parts, ...central, end], { type: 'application/zip' });
+  }
+  // Some phones refuse download names that aren't plain Latin, so Georgian is spelled out in Latin letters.
+  const KA = 'ა a ბ b გ g დ d ე e ვ v ზ z თ t ი i კ k ლ l მ m ნ n ო o პ p ჟ zh რ r ს s ტ t უ u ფ p ქ k ღ gh ყ q შ sh ჩ ch ც ts ძ dz წ ts ჭ ch ხ kh ჯ j ჰ h'.split(' ');
+  const KA_MAP = Object.fromEntries(KA.reduce((acc, x, i) => (i % 2 ? acc : acc.concat([[x, KA[i + 1]]])), []));
+  const latinName = (s) => s.replace(/[\u10d0-\u10ff]/g, (c) => KA_MAP[c] || '').replace(/[^\x20-\x7e]/g, '').replace(/\s+/g, ' ').trim();
+  function saveBlob(blob, name) {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = latinName(name) || 'photos';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  }
+  function downloadPhotos(memories, zipName) {
+    const files = memories.flatMap(photoFiles);
+    if (!files.length) { toast('No photos to download yet.'); return; }
+    if (files.length === 1) saveBlob(new Blob([files[0].bytes], { type: 'image/jpeg' }), files[0].name);
+    else saveBlob(makeZip(files), zipName);
+    toast(files.length === 1 ? 'Photo downloaded' : `${files.length} photos downloaded as one .zip file`, 3000);
+  }
+
   // ---------- "My map" sheet ----------
   let listTab = 'memories';
   function openList() {
@@ -708,7 +764,10 @@
         const li = document.createElement('li');
         if (listTab === 'memories') {
           li.innerHTML = `${photosOf(it)[0] ? `<img class="thumb" src="${photosOf(it)[0]}" alt="">` : '<span class="thumb"><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.4-7 10-7 10z"/></svg></span>'}
-            <div class="txt"><div class="t">${esc(it.title)}</div><div class="s">${it.date ? fmtDate(it.date) : ''}</div></div>`;
+            <div class="txt"><div class="t">${esc(it.title)}</div><div class="s">${it.date ? fmtDate(it.date) : ''}${photosOf(it).length > 1 ? ` · ${photosOf(it).length} photos` : ''}</div></div>
+            ${photosOf(it).length ? '<button class="icon-btn row-dl" type="button" aria-label="Download photos"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg></button>' : ''}`;
+          const dlb = li.querySelector('.row-dl');
+          if (dlb) dlb.onclick = (e) => { e.stopPropagation(); downloadPhotos([it], `${it.date || todayISO()} ${safeName(it.title)}.zip`); };
           li.onclick = () => { closeSheet(); map.flyTo([it.lat, it.lng], 17); setTimeout(() => it._marker && it._marker.openPopup(), 700); };
         } else {
           li.innerHTML = `<span class="walk-sw"></span><div class="txt"><div class="t">${esc(it.name)}</div>
@@ -720,6 +779,13 @@
           };
         }
         ul.appendChild(li);
+      }
+      const nPhotos = listTab === 'memories' ? state.memories.reduce((n, m) => n + photosOf(m).length, 0) : 0;
+      if (nPhotos) {
+        const li = document.createElement('li'); li.className = 'list-action';
+        li.innerHTML = `<button class="btn btn-block" type="button">Download all ${nPhotos} ${nPhotos === 1 ? 'photo' : 'photos'}</button>`;
+        li.querySelector('button').onclick = () => downloadPhotos(state.memories.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')), `Niniko's Map photos ${todayISO()}.zip`);
+        ul.prepend(li);
       }
       // Offer to clear out tiny walks saved by older versions of the app.
       const tiny = listTab === 'walks' ? state.walks.filter((w) => !w.drawn && isTinyWalk(w.points, w.distance)) : [];
