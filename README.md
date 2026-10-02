@@ -8,6 +8,11 @@ A phone web app with a map of Batumi and Tbilisi that remembers the streets you 
 - **Photo button** (camera, right side): take a photo and it is saved to the memory where you are standing, or starts a new memory there named after the nearest popular place. *+ Photo* on a memory adds more.
 - **My map** lists walks and memories, lets you draw a past walk by tapping along streets, and saves or restores a backup file.
 - **Trail times**: tap any point of a recorded walk to see when you were there.
+- **Smooth trails**: GPS wobble and glitches are smoothed out, so a straight walk draws as a clean line. Walks under 200 m aren't saved, and *My map → Walks* offers to remove old tiny ones.
+- **Trip diary** (*My map → Days*): one line per day with distance, time and photos. Tap a day to see just that day, then **Replay the day** to watch the walk draw itself with the time ticking and memories popping up.
+- **Trip stats**: total distance, favourite districts (from OpenStreetMap neighbourhood names), what time of day you walk, and your biggest day.
+- **Visited**: mark places visited in their popup (taking a photo at a place does it too). A chip filters visited / not visited, and *My map → Visited* lists them.
+- **Download photos**: *Download* on a memory, or *Download all photos* in *My map → Memories* (several photos come as one .zip).
 - **Automatic trail**: while the app is open it records where you go (turn this off in *My map*). A break of more than 30 minutes starts a new walk.
 - **Places**: chips at the top show sights, museums, galleries, event venues, parks, cafés, restaurants, bars, pharmacies and hospitals from OpenStreetMap. Each place shows whether it is open now (Batumi time, from its listed opening hours) and whether you need a ticket. The main paid sights have notes on price and where to buy; prices are the last known ones and should be checked. *Open now* hides closed places. *Popular only* (on by default) hides lesser-known places; tap it to see *All places*.
 - **Map style** (layers button): Bright (full-colour OpenStreetMap, default), Colourful (OSM France) or Soft. If a style's server is down the app goes back to Bright.

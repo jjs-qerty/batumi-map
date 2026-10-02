@@ -246,19 +246,36 @@
     return out;
   }
 
-  async function fetchPlaces(city) {
+  // Ask OpenStreetMap (Overpass), trying the next server if one is down.
+  async function overpass(query) {
     let lastErr;
     for (const url of OVERPASS) {
       try {
         const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), 45000);
-        const res = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(overpassQuery(city)),
+        const res = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(query),
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctrl.signal });
         clearTimeout(timer);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        return slim(await res.json());
+        return await res.json();
       } catch (e) { lastErr = e; }
     }
     throw lastErr;
+  }
+  async function fetchPlaces(city) { return slim(await overpass(overpassQuery(city))); }
+
+  // Named districts and neighbourhoods of a city, for "favourite district" in trip stats.
+  const DISTRICT_DAYS = 30;
+  async function districts(city) {
+    const key = 'niniko.districts.' + city;
+    try { const c = JSON.parse(localStorage.getItem(key) || 'null'); if (c && Date.now() - c.at < DISTRICT_DAYS * 864e5) return c.items; } catch (e) { /* ignore */ }
+    const b = '(' + BBOX[city] + ')';
+    const json = await overpass(`[out:json][timeout:40];nwr[place~"^(suburb|neighbourhood|quarter)$"][name]${b};out center tags;`);
+    const items = (json.elements || []).map((e) => ({
+      name: (e.tags && (e.tags['name:en'] || e.tags.name)) || '', local: (e.tags && e.tags.name) || '',
+      lat: e.lat ?? (e.center && e.center.lat), lng: e.lon ?? (e.center && e.center.lon),
+    })).filter((d) => d.name && d.lat != null);
+    try { localStorage.setItem(key, JSON.stringify({ at: Date.now(), items })); } catch (e) { /* full */ }
+    return items;
   }
 
   const cacheKey = (city) => (city === 'batumi' ? CACHE_KEY : CACHE_KEY + '.' + city);
@@ -469,5 +486,5 @@
     };
   }
 
-  window.NinikoPlaces = { init, _test: { parseHours, openStatus, isOpenAt } };
+  window.NinikoPlaces = { init, districts, _test: { parseHours, openStatus, isOpenAt } };
 })();

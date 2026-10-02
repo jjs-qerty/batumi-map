@@ -215,7 +215,7 @@
     walksLayer.clearLayers();
     for (const w of state.walks) {
       const pts = w.drawn ? w.points.map((p) => [p[0], p[1]]) : smoothTrail(w.points);
-      L.polyline(pts, { ...walkStyle(), interactive: false }).addTo(walksLayer);
+      w._line = L.polyline(pts, { ...walkStyle(), interactive: false }).addTo(walksLayer);
       trailHitLine(pts, (latlng) => openWalkPopup(w, latlng)).addTo(walksLayer);
     }
   }
@@ -247,7 +247,7 @@
     const hit = L.polyline(pts, { color: '#000', opacity: 0, weight: 26, lineCap: 'round', lineJoin: 'round' });
     hit.on('click', (e) => {
       L.DomEvent.stopPropagation(e);
-      if (state.mode !== 'idle') handleMapTap(e.latlng); else onTap(e.latlng);
+      if (state.mode !== 'idle' && state.mode !== 'day') handleMapTap(e.latlng); else onTap(e.latlng);
     });
     return hit;
   }
@@ -371,7 +371,7 @@
 
   function setMode(mode) {
     state.mode = mode;
-    document.body.classList.toggle('picking', mode !== 'idle');
+    document.body.classList.toggle('picking', mode !== 'idle' && mode !== 'day');
     if (mode === 'idle') hideHint();
   }
 
@@ -573,6 +573,7 @@
 
   function cancelMode() {
     state.pendingPhotos = null;
+    if (state.mode === 'day') { stopReplay(); renderAll(); }
     if (state.draw) { map.removeLayer(state.draw.line); map.removeLayer(state.draw.vertices); state.draw = null; }
     setMode('idle');
   }
@@ -667,6 +668,187 @@
     };
   }
 
+  // ---------- trip journal: days, replay, stats ----------
+  const dayKey = (ms) => new Date(ms - new Date(ms).getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const fmtDayLong = (key) => new Date(key + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const fmtDayShort = (key) => new Date(key + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+  function fmtSpan(ms) { const m = Math.round(ms / 60000), h = Math.floor(m / 60); return h ? `${h} h ${m % 60} min` : `${m} min`; }
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+  // Everything that happened on each day: walks, memories (by their date) and places marked visited.
+  function journalDays() {
+    const days = new Map();
+    const day = (k) => { if (!days.has(k)) days.set(k, { key: k, walks: [], memories: [], visited: [], dist: 0, ms: 0, photos: 0 }); return days.get(k); };
+    for (const w of state.walks) {
+      const d = day(dayKey(w.startedAt)); d.walks.push(w); d.dist += w.distance || 0;
+      if (!w.drawn && w.endedAt) d.ms += w.endedAt - w.startedAt;
+    }
+    for (const m of state.memories) { const d = day(m.date || dayKey(m.createdAt || Date.now())); d.memories.push(m); d.photos += photosOf(m).length; }
+    for (const v of places.visitedList()) if (v.at) day(dayKey(v.at)).visited.push(v);
+    return [...days.values()].sort((a, b) => b.key.localeCompare(a.key));
+  }
+  function daySummary(d) {
+    return [d.dist ? fmtDist(d.dist) : '', d.ms > 60000 ? fmtSpan(d.ms) : '', d.photos ? plural(d.photos, 'photo', 'photos') : '',
+      d.memories.length && !d.photos ? plural(d.memories.length, 'memory', 'memories') : '',
+      d.visited.length ? plural(d.visited.length, 'place', 'places') : ''].filter(Boolean).join(' · ') || 'Nothing saved';
+  }
+
+  // Show one day on the map: its walks and memories stand out, everything else fades.
+  function showDay(key) {
+    closeSheet(); map.closePopup(); if (state.mode !== 'idle') cancelMode();
+    const d = journalDays().find((x) => x.key === key); if (!d) return;
+    setMode('day');
+    const pts = [];
+    d.walks.forEach((w) => w.points.forEach((p) => pts.push([p[0], p[1]])));
+    d.memories.forEach((m) => pts.push([m.lat, m.lng])); d.visited.forEach((v) => pts.push([v.lat, v.lng]));
+    const c = pts.length && Object.keys(CITIES).find((k) => inCity(k, pts[0][0], pts[0][1]));
+    if (c && c !== city) setCity(c, false);
+    dimForDay(d, 0.95);
+    if (pts.length) map.fitBounds(L.latLngBounds(pts), { padding: [70, 70], maxZoom: 17 });
+    showHint(`${fmtDayShort(key)} · ${daySummary(d)}`, [
+      ...(d.walks.some((w) => w.points.length > 1) ? [{ label: 'Replay the day', primary: true, onClick: () => replayDay(d) }] : []),
+      { label: 'Done', onClick: cancelMode },
+    ]);
+  }
+  function dimForDay(d, dayOpacity) {
+    const ids = new Set(d.walks.map((w) => w.id)), mids = new Set(d.memories.map((m) => m.id));
+    state.walks.forEach((w) => w._line && w._line.setStyle({ opacity: ids.has(w.id) ? dayOpacity : 0.12 }));
+    state.memories.forEach((m) => m._marker && m._marker.setOpacity(mids.has(m.id) ? 1 : 0.3));
+  }
+
+  // Replay: the day's walks draw themselves in order, with the time ticking and memories popping up as you reach them.
+  let replay = null;
+  function stopReplay() { if (!replay) return; cancelAnimationFrame(replay.raf); map.removeLayer(replay.layer); replay = null; }
+  function replayDay(d) {
+    stopReplay();
+    const segs = d.walks.filter((w) => w.points.length > 1).sort((a, b) => a.startedAt - b.startedAt).map((w) => {
+      const line = w.drawn ? w.points.map((p) => [p[0], p[1]]) : smoothTrail(w.points), cum = [0];
+      for (let i = 1; i < line.length; i++) cum.push(cum[i - 1] + haversine(line[i - 1], line[i]));
+      return { w, line, cum, len: cum[cum.length - 1] };
+    }).filter((sg) => sg.len > 0);
+    const total = segs.reduce((n, sg) => n + sg.len, 0); if (!total) return;
+    dimForDay(d, 0.12);
+    d.memories.forEach((m) => m._marker && m._marker.setOpacity(0.3));
+    const layer = L.layerGroup().addTo(map);
+    const traces = segs.map(() => L.polyline([], { ...walkStyle(), opacity: 1, weight: 7, interactive: false }).addTo(layer));
+    const dot = L.marker(segs[0].line[0], { icon: L.divIcon({ className: '', html: '<div class="replay-dot"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }), interactive: false, zIndexOffset: 900 }).addTo(layer);
+    const dur = Math.min(25000, Math.max(8000, total * 5)); // about 5 seconds per km
+    const popped = new Set(), t0 = performance.now();
+    replay = { layer, raf: 0 };
+    showHint(fmtDayShort(d.key), [{ label: 'Stop', onClick: () => finish() }]);
+    const finish = () => {
+      if (!replay) return;
+      cancelAnimationFrame(replay.raf);
+      segs.forEach((sg, i) => traces[i].setLatLngs(sg.line));
+      d.memories.forEach((m) => m._marker && m._marker.setOpacity(1));
+      showHint(`${fmtDayShort(d.key)} · ${daySummary(d)}`, [
+        { label: 'Replay again', primary: true, onClick: () => replayDay(d) }, { label: 'Done', onClick: cancelMode }]);
+    };
+    const frame = (now) => {
+      if (!replay) return;
+      const f = Math.min(1, (now - t0) / dur);
+      let left = f * total, cur = null;
+      segs.forEach((sg, i) => {
+        if (left <= 0) { traces[i].setLatLngs([]); return; }
+        const upto = Math.min(left, sg.len); left -= sg.len;
+        let j = 1; while (j < sg.cum.length - 1 && sg.cum[j] < upto) j++;
+        const a = sg.line[j - 1], b = sg.line[j], k = Math.min(1, (upto - sg.cum[j - 1]) / ((sg.cum[j] - sg.cum[j - 1]) || 1));
+        const here = [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k];
+        traces[i].setLatLngs(sg.line.slice(0, j).concat([here]));
+        cur = { here, sg, upto };
+      });
+      if (cur) {
+        dot.setLatLng(cur.here);
+        const w = cur.sg.w;
+        const clock = !w.drawn && w.endedAt ? ' · ' + fmtTime(w.startedAt + (w.endedAt - w.startedAt) * (cur.upto / cur.sg.len)) : '';
+        $('hintText').textContent = fmtDayShort(d.key) + clock;
+        for (const m of d.memories) if (!popped.has(m.id) && haversine(cur.here, [m.lat, m.lng]) < 40) { popped.add(m.id); popMemory(m); }
+      }
+      if (f < 1) replay.raf = requestAnimationFrame(frame); else finish();
+    };
+    replay.raf = requestAnimationFrame(frame);
+  }
+  function popMemory(m) {
+    const mk = m._marker; if (!mk) return;
+    mk.setOpacity(1);
+    const el = mk.getElement(); if (el) { el.classList.add('pop-in'); setTimeout(() => el.classList.remove('pop-in'), 700); }
+    mk.bindTooltip(esc(m.title), { direction: 'top', offset: [0, -38] }).openTooltip();
+    setTimeout(() => mk.unbindTooltip(), 2600);
+  }
+
+  // Trip stats: totals, favourite districts, when you like to walk, best days.
+  function openStats() {
+    const days = journalDays();
+    const total = state.walks.reduce((n, w) => n + (w.distance || 0), 0);
+    const photos = state.memories.reduce((n, m) => n + photosOf(m).length, 0);
+    const longest = state.walks.slice().sort((a, b) => (b.distance || 0) - (a.distance || 0))[0];
+    const best = days.filter((d) => d.dist).sort((a, b) => b.dist - a.dist)[0];
+    // Time of day, from the recorded points' times.
+    const parts = [['Morning', 5, 12], ['Afternoon', 12, 17], ['Evening', 17, 22], ['Night', 22, 29]], byPart = [0, 0, 0, 0];
+    for (const w of state.walks) {
+      if (w.drawn) continue;
+      for (let i = 1; i < w.points.length; i++) {
+        const t = w.points[i][2]; if (!t) continue;
+        let hr = new Date(t).getHours(); if (hr < 5) hr += 24;
+        const k = parts.findIndex(([, a, b]) => hr >= a && hr < b);
+        if (k >= 0) byPart[k] += haversine(w.points[i - 1], w.points[i]);
+      }
+    }
+    const bars = (rows) => {
+      const max = Math.max(...rows.map((r) => r[1]), 1);
+      return rows.map(([label, v, note]) => `<div class="bar-row"><span>${esc(label)}</span><b>${esc(note || fmtDist(v))}</b>
+        <div class="bar"><i style="width:${Math.max(3, Math.round(v / max * 100))}%"></i></div></div>`).join('');
+    };
+    const partSum = byPart.reduce((a, b) => a + b, 0);
+    const node = h(`
+      <div class="summary">
+        <div><b>${fmtDist(total)}</b><span>walked</span></div>
+        <div><b>${days.length}</b><span>${days.length === 1 ? 'day' : 'days'}</span></div>
+        <div><b>${photos}</b><span>${photos === 1 ? 'photo' : 'photos'}</span></div>
+      </div>
+      <div class="section-title">Favourite districts</div>
+      <div id="statDistricts" class="note">Looking up the districts you walked through…</div>
+      ${partSum ? `<div class="section-title">When you walk</div>${bars(parts.map(([n], i) => [n, byPart[i]]).filter((r) => r[1] > 0))}` : ''}
+      <div class="section-title">Highlights</div>
+      <ul class="facts">
+        ${best ? `<li>Biggest day: <b>${esc(fmtDayLong(best.key))}</b>, ${fmtDist(best.dist)}</li>` : ''}
+        ${longest && longest.distance ? `<li>Longest walk: <b>${esc(longest.name)}</b>, ${fmtDist(longest.distance)}</li>` : ''}
+        <li>Places visited: <b>${places.visitedList().length}</b></li>
+        <li>Memories saved: <b>${state.memories.length}</b></li>
+      </ul>`);
+    openSheet('Trip stats', node);
+    favouriteDistricts().then((rows) => {
+      const box = $('statDistricts'); if (!box) return;
+      if (!rows.length) { box.textContent = state.walks.length ? 'District names aren\'t available for where you walked yet.' : 'Go for a walk and your favourite districts show up here.'; return; }
+      const sum = rows.reduce((n, r) => n + r.dist, 0);
+      box.className = '';
+      box.innerHTML = `<p class="fav">Your favourite: <b>${esc(rows[0].name)}</b>${rows[0].local && rows[0].local !== rows[0].name ? ` <span class="note">${esc(rows[0].local)}</span>` : ''}
+        <span class="note">(${Math.round(rows[0].dist / sum * 100)}% of your walking)</span></p>` + bars(rows.slice(0, 5).map((r) => [r.name, r.dist]));
+    }).catch(() => { const box = $('statDistricts'); if (box) box.textContent = 'Couldn\'t look up district names right now. Try again when you are online.'; });
+  }
+  // Each stretch of walking counts for the nearest named district or neighbourhood (within 3 km).
+  async function favouriteDistricts() {
+    const totals = new Map();
+    const cities = Object.keys(CITIES).filter((c) => state.walks.some((w) => w.points.length && inCity(c, w.points[0][0], w.points[0][1])));
+    for (const c of cities) {
+      const list = await NinikoPlaces.districts(c);
+      if (!list.length) continue;
+      for (const w of state.walks) {
+        if (!w.points.length || !inCity(c, w.points[0][0], w.points[0][1])) continue;
+        const line = w.drawn ? w.points : smoothTrail(w.points);
+        for (let i = 1; i < line.length; i++) {
+          const mid = [(line[i - 1][0] + line[i][0]) / 2, (line[i - 1][1] + line[i][1]) / 2];
+          let best = null, bestD = 3000;
+          for (const dd of list) { const dist = haversine(mid, [dd.lat, dd.lng]); if (dist < bestD) { bestD = dist; best = dd; } }
+          if (!best) continue;
+          const k = best.name, row = totals.get(k) || { name: best.name, local: best.local, dist: 0 };
+          row.dist += haversine(line[i - 1], line[i]); totals.set(k, row);
+        }
+      }
+    }
+    return [...totals.values()].sort((a, b) => b.dist - a.dist);
+  }
+
   // ---------- downloading photos ----------
   function dataUrlToBytes(url) {
     const bin = atob(url.slice(url.indexOf(',') + 1)), out = new Uint8Array(bin.length);
@@ -721,7 +903,7 @@
   }
 
   // ---------- "My map" sheet ----------
-  let listTab = 'memories';
+  let listTab = 'days';
   function openList() {
     if (state.mode !== 'idle') cancelMode();
     const km = state.walks.reduce((s, w) => s + (w.distance || 0), 0);
@@ -731,7 +913,9 @@
         <div><b>${state.walks.length}</b><span>${state.walks.length === 1 ? 'walk' : 'walks'}</span></div>
         <div><b>${state.memories.length}</b><span>${state.memories.length === 1 ? 'memory' : 'memories'}</span></div>
       </div>
+      <button class="btn btn-block" type="button" id="openStats">Trip stats: favourite district, best days</button>
       <div class="tabs" role="tablist">
+        <button role="tab" type="button" id="tabDays" aria-selected="${listTab === 'days'}">Days</button>
         <button role="tab" type="button" id="tabMem" aria-selected="${listTab === 'memories'}">Memories</button>
         <button role="tab" type="button" id="tabWalk" aria-selected="${listTab === 'walks'}">Walks</button>
         <button role="tab" type="button" id="tabVisit" aria-selected="${listTab === 'visited'}">Visited</button>
@@ -751,8 +935,21 @@
     openSheet('My map', node);
     const fill = () => {
       $('tabMem').setAttribute('aria-selected', listTab === 'memories'); $('tabWalk').setAttribute('aria-selected', listTab === 'walks');
-      $('tabVisit').setAttribute('aria-selected', listTab === 'visited');
+      $('tabVisit').setAttribute('aria-selected', listTab === 'visited'); $('tabDays').setAttribute('aria-selected', listTab === 'days');
       const ul = $('listItems'); ul.innerHTML = '';
+      if (listTab === 'days') {
+        const days = journalDays();
+        if (!days.length) { ul.innerHTML = '<li class="empty" style="cursor:default">Your trip diary fills in here, one line per day you walked or saved a memory.</li>'; return; }
+        for (const d of days) {
+          const li = document.createElement('li');
+          const thumb = d.memories.map((m) => photosOf(m)[0]).find(Boolean);
+          li.innerHTML = `${thumb ? `<img class="thumb" src="${thumb}" alt="">` : '<span class="walk-sw"></span>'}
+            <div class="txt"><div class="t">${esc(fmtDayLong(d.key))}</div><div class="s">${esc(daySummary(d))}</div></div>`;
+          li.onclick = () => showDay(d.key);
+          ul.appendChild(li);
+        }
+        return;
+      }
       if (listTab === 'visited') {
         const vis = places.visitedList();
         if (!vis.length) { ul.innerHTML = '<li class="empty" style="cursor:default">No visited places yet. Tap a place on the map and choose Mark visited. Taking a photo at a place marks it too.</li>'; return; }
@@ -820,6 +1017,8 @@
     };
     $('tabMem').onclick = () => { listTab = 'memories'; fill(); };
     $('tabWalk').onclick = () => { listTab = 'walks'; fill(); };
+    $('tabDays').onclick = () => { listTab = 'days'; fill(); };
+    $('openStats').onclick = openStats;
     $('tabVisit').onclick = () => { listTab = 'visited'; fill(); };
     $('autoRec').checked = autoOn();
     $('autoRec').onchange = (e) => {
@@ -881,14 +1080,17 @@
     let draft = null;
     try { draft = JSON.parse(localStorage.getItem(REC_KEY) || 'null'); } catch (e) { draft = null; }
     if (!draft || !draft.points) return;
+    // An old leftover that's too short to keep isn't worth asking about.
+    const tiny = isTinyWalk(draft.points, trailLength(draft.points));
+    if (tiny && Date.now() - lastPointTime(draft) > AUTO_GAP_MS) { clearRecDraft(); return; }
     const node = h(`
       <p class="note">You have a walk that was still recording (${fmtDist(trailLength(draft.points))}, started ${fmtTime(draft.startedAt)}).</p>
       <div class="form-actions"><button class="btn" type="button" id="resDiscard">Discard</button>
-      <button class="btn" type="button" id="resSave">Save it</button>
+      ${tiny ? '' : '<button class="btn" type="button" id="resSave">Save it</button>'}
       <button class="btn btn-primary" type="button" id="resGo">Keep recording</button></div>`);
     openSheet('Unfinished walk', node);
     $('resDiscard').onclick = () => { clearRecDraft(); closeSheet(); };
-    $('resSave').onclick = () => { closeSheet(); state.recording = draft; stopRecording(true); };
+    if (!tiny) $('resSave').onclick = () => { closeSheet(); state.recording = draft; stopRecording(true); };
     $('resGo').onclick = () => { closeSheet(); startRecording(draft); };
   }
 
