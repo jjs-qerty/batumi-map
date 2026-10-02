@@ -10,7 +10,8 @@
   const CITY_KEY = 'niniko.city';
   let city = (() => { try { return CITIES[localStorage.getItem(CITY_KEY)] ? localStorage.getItem(CITY_KEY) : 'batumi'; } catch (e) { return 'batumi'; } })();
   const inCity = (c, lat, lng) => { const b = CITIES[c].box; return lat >= b[0] && lat <= b[2] && lng >= b[1] && lng <= b[3]; };
-  const MIN_STEP_M = 5;              // ignore GPS jitter smaller than this
+  const MIN_STEP_M = 8;              // ignore GPS jitter smaller than this
+  const MAX_SPEED_MS = 15;           // a jump faster than this (54 km/h) is a GPS glitch, unless it keeps happening
   const AUTO_KEY = 'niniko.autoRecord';
   const AUTO_GAP_MS = 30 * 60000;    // a trail paused longer than this becomes its own walk
   const AUTO_MIN_M = 50;             // automatic trails shorter than this are dropped
@@ -34,6 +35,52 @@
     for (let i = 1; i < pts.length; i++) d += haversine(pts[i - 1], pts[i]);
     return d;
   }
+
+  // GPS wobbles a few metres either side of where you really walked, which draws as zigzags.
+  // For drawing and distance: drop out-and-back spikes, average each point with its neighbours,
+  // then remove points that sit on a straight line. The recorded points (with times) stay untouched.
+  function smoothTrail(points) {
+    let pts = points.map((p) => [p[0], p[1]]);
+    if (pts.length < 3) return pts;
+    const kept = [pts[0]];
+    for (let i = 1; i < pts.length - 1; i++) {
+      const a = kept[kept.length - 1], b = pts[i], c = pts[i + 1];
+      const ab = haversine(a, b), bc = haversine(b, c);
+      if (ab > 12 && bc > 12 && haversine(a, c) < 0.35 * Math.min(ab, bc)) continue; // went out and straight back
+      kept.push(b);
+    }
+    kept.push(pts[pts.length - 1]); pts = kept;
+    const W = [1, 2, 3, 2, 1];
+    for (let pass = 0; pass < 2; pass++) {
+      pts = pts.map((p, i) => {
+        if (i === 0 || i === pts.length - 1) return p;
+        let la = 0, ln = 0, ws = 0;
+        for (let k = -2; k <= 2; k++) { const q = pts[i + k]; if (!q) continue; la += q[0] * W[k + 2]; ln += q[1] * W[k + 2]; ws += W[k + 2]; }
+        return [la / ws, ln / ws];
+      });
+    }
+    return simplifyPath(pts, 2.5);
+  }
+  // Douglas–Peucker simplification with the tolerance in metres.
+  function simplifyPath(pts, tol) {
+    if (pts.length < 3) return pts;
+    const lat0 = pts[0][0], kx = 111320 * Math.cos(lat0 * Math.PI / 180), ky = 110540;
+    const xy = pts.map((p) => [(p[1] - pts[0][1]) * kx, (p[0] - lat0) * ky]);
+    const keep = new Uint8Array(pts.length); keep[0] = keep[pts.length - 1] = 1;
+    const stack = [[0, pts.length - 1]];
+    while (stack.length) {
+      const [a, b] = stack.pop();
+      const [ax, ay] = xy[a], [bx, by] = xy[b], dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy) || 1e-9;
+      let far = -1, farD = tol;
+      for (let i = a + 1; i < b; i++) {
+        const d = Math.abs(dy * (xy[i][0] - ax) - dx * (xy[i][1] - ay)) / len;
+        if (d > farD) { farD = d; far = i; }
+      }
+      if (far > 0) { keep[far] = 1; stack.push([a, far], [far, b]); }
+    }
+    return pts.filter((p, i) => keep[i]);
+  }
+  const trailLength = (points) => pathLength(smoothTrail(points));
   function fmtDist(m) { return m < 1000 ? Math.round(m) + ' m' : (m / 1000).toFixed(m < 10000 ? 2 : 1) + ' km'; }
   function fmtDur(ms) {
     const s = Math.max(0, Math.round(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
@@ -153,19 +200,20 @@
     mode: 'idle',     // idle | pickMemory | drawWalk
     draw: null,       // { points: [], line, vertices }
     pendingMemory: null,
+    jumps: 0,            // GPS jumps skipped in a row
   };
 
   // ---------- rendering ----------
   function renderStats() {
     let km = state.walks.reduce((s, w) => s + (w.distance || 0), 0);
-    if (state.recording) km += pathLength(state.recording.points); // count the walk in progress too
+    if (state.recording) km += trailLength(state.recording.points); // count the walk in progress too
     $('stats').innerHTML = `<span class="sw" style="background:${walkColor()}"></span><b>${fmtDist(km)}</b> walked · <b>${state.memories.length}</b> ${state.memories.length === 1 ? 'memory' : 'memories'}`;
   }
 
   function renderWalks() {
     walksLayer.clearLayers();
     for (const w of state.walks) {
-      const pts = w.points.map((p) => [p[0], p[1]]);
+      const pts = w.drawn ? w.points.map((p) => [p[0], p[1]]) : smoothTrail(w.points);
       L.polyline(pts, { ...walkStyle(), interactive: false }).addTo(walksLayer);
       trailHitLine(pts, (latlng) => openWalkPopup(w, latlng)).addTo(walksLayer);
     }
@@ -388,7 +436,7 @@
   function updateRecBanner() {
     if (!state.recording) return;
     const pts = state.recording.points;
-    $('recMeta').textContent = `${fmtDist(pathLength(pts))} · ${fmtDur(Date.now() - state.recording.startedAt)}`;
+    $('recMeta').textContent = `${fmtDist(trailLength(pts))} · ${fmtDur(Date.now() - state.recording.startedAt)}`;
     renderStats();
   }
   let recTick = null;
@@ -397,7 +445,7 @@
     const rec = state.recording; if (!rec) return;
     const near = nearestPoint(rec.points, latlng); if (!near) return;
     L.popup({ maxWidth: 260 }).setLatLng([near[0], near[1]])
-      .setContent(`<div class="pop"><div class="here-at">You were here at <b>${fmtClock(near[2])}</b></div><div class="when">Current trail · ${fmtDist(pathLength(rec.points))} so far</div></div>`)
+      .setContent(`<div class="pop"><div class="here-at">You were here at <b>${fmtClock(near[2])}</b></div><div class="when">Current trail · ${fmtDist(trailLength(rec.points))} so far</div></div>`)
       .openOn(map);
     markTrailPoint(near);
   }
@@ -406,7 +454,7 @@
     if (!('geolocation' in navigator)) { toast('This browser cannot read GPS.'); return; }
     if (!window.isSecureContext) { toast(geoError(), 4500); return; }
     state.recording = resume || { id: uid(), startedAt: Date.now(), points: [] };
-    const startPts = state.recording.points.map((p) => [p[0], p[1]]);
+    const startPts = smoothTrail(state.recording.points);
     state.recLine = L.layerGroup([
       L.polyline(startPts, { ...walkStyle(), opacity: 0.95, interactive: false }),
       trailHitLine(startPts, liveTrailPopup),
@@ -423,9 +471,15 @@
       if (first) { first = false; map.setView([lat, lng], Math.max(map.getZoom(), 17)); }
       if (accuracy > MAX_ACCURACY_M) { $('recText').textContent = 'Waiting for better GPS'; return; }
       $('recText').textContent = 'Recording';
-      const pts = state.recording.points, p = [lat, lng, pos.timestamp];
-      if (pts.length && haversine(pts[pts.length - 1], p) < Math.max(MIN_STEP_M, Math.min(accuracy, 25))) return;
-      pts.push(p); state.recLine.eachLayer((l) => l.addLatLng([lat, lng])); saveRecDraft(); updateRecBanner();
+      const pts = state.recording.points, p = [lat, lng, pos.timestamp], last = pts[pts.length - 1];
+      if (last) {
+        const d = haversine(last, p);
+        if (d < Math.max(MIN_STEP_M, Math.min(accuracy, 25))) return;
+        // A sudden jump far faster than walking is usually a GPS glitch. If the jumps keep coming, you really moved (bus, taxi).
+        if (last[2] && d / Math.max(1, (p[2] - last[2]) / 1000) > MAX_SPEED_MS && ++state.jumps < 3) return;
+      }
+      state.jumps = 0;
+      pts.push(p); const line = smoothTrail(pts); state.recLine.eachLayer((l) => l.setLatLngs(line)); saveRecDraft(); updateRecBanner();
     }, (err) => { $('recText').textContent = 'GPS paused'; if (err.code === 1) { toast(geoError(err), 4500); stopRecording(false); } },
     { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
     if (!resume && !auto) toast('Walk started. Keep the app open while you walk.', 3500);
@@ -443,7 +497,7 @@
     if (state.recLine) { map.removeLayer(state.recLine); state.recLine = null; }
     const rec = state.recording; state.recording = null;
     if (!save || !rec) { clearRecDraft(); return; }
-    const dist = pathLength(rec.points);
+    const dist = trailLength(rec.points);
     if (rec.points.length < 2 || (quiet && dist < AUTO_MIN_M)) {
       clearRecDraft(); if (!quiet) toast('Walk was too short to save.'); return Promise.resolve();
     }
@@ -712,6 +766,8 @@
   // ---------- startup ----------
   async function load() {
     state.walks = (await store.all('walks')) || [];
+    // Distances are measured on the smoothed line, so GPS wobble doesn't add metres you never walked.
+    state.walks.forEach((w) => { if (!w.drawn && w.points.length > 2) w.distance = trailLength(w.points); });
     state.memories = (await store.all('memories')) || [];
     renderAll();
   }
@@ -721,7 +777,7 @@
     try { draft = JSON.parse(localStorage.getItem(REC_KEY) || 'null'); } catch (e) { draft = null; }
     if (!draft || !draft.points) return;
     const node = h(`
-      <p class="note">You have a walk that was still recording (${fmtDist(pathLength(draft.points))}, started ${fmtTime(draft.startedAt)}).</p>
+      <p class="note">You have a walk that was still recording (${fmtDist(trailLength(draft.points))}, started ${fmtTime(draft.startedAt)}).</p>
       <div class="form-actions"><button class="btn" type="button" id="resDiscard">Discard</button>
       <button class="btn" type="button" id="resSave">Save it</button>
       <button class="btn btn-primary" type="button" id="resGo">Keep recording</button></div>`);
