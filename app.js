@@ -14,7 +14,8 @@
   const MAX_SPEED_MS = 15;           // a jump faster than this (54 km/h) is a GPS glitch, unless it keeps happening
   const AUTO_KEY = 'niniko.autoRecord';
   const AUTO_GAP_MS = 30 * 60000;    // a trail paused longer than this becomes its own walk
-  const AUTO_MIN_M = 50;             // automatic trails shorter than this are dropped
+  const MIN_WALK_M = 200;            // walks shorter than this aren't saved (they just clutter the list)
+  const MIN_SPREAD_M = 60;           // nor walks that never got further than this from where they started
   const MAX_ACCURACY_M = 40;         // ignore fixes worse than this
   const REC_KEY = 'niniko.recording';
 
@@ -128,7 +129,7 @@
         if (!db) { resolve(fn(null)); return; }
         const t = db.transaction(name, mode), os = t.objectStore(name);
         const r = fn(os);
-        t.oncomplete = () => resolve(r && 'result' in r ? r.result : r);
+        t.oncomplete = () => resolve(r && typeof r === 'object' && 'result' in r ? r.result : r); // delete returns a plain id string
         t.onerror = () => reject(t.error);
       }));
     }
@@ -498,8 +499,8 @@
     const rec = state.recording; state.recording = null;
     if (!save || !rec) { clearRecDraft(); return; }
     const dist = trailLength(rec.points);
-    if (rec.points.length < 2 || (quiet && dist < AUTO_MIN_M)) {
-      clearRecDraft(); if (!quiet) toast('Walk was too short to save.'); return Promise.resolve();
+    if (isTinyWalk(rec.points, dist)) {
+      clearRecDraft(); if (!quiet) toast(`Walks under ${MIN_WALK_M} m aren't saved, so this one was left out.`, 3500); return Promise.resolve();
     }
     const last = rec.points[rec.points.length - 1][2];
     const w = {
@@ -509,6 +510,12 @@
     return store.put('walks', w).then(() => {
       clearRecDraft(); state.walks.push(w); renderAll(); if (!quiet) openWalkForm(w, true);
     });
+  }
+
+  // Too short, or just GPS drifting while you sat in one place.
+  function isTinyWalk(points, dist) {
+    if (points.length < 2 || dist < MIN_WALK_M) return true;
+    return !points.some((p) => haversine(points[0], p) > MIN_SPREAD_M);
   }
 
   $('btnRec').onclick = () => {
@@ -713,6 +720,19 @@
           };
         }
         ul.appendChild(li);
+      }
+      // Offer to clear out tiny walks saved by older versions of the app.
+      const tiny = listTab === 'walks' ? state.walks.filter((w) => !w.drawn && isTinyWalk(w.points, w.distance)) : [];
+      if (tiny.length) {
+        const li = document.createElement('li'); li.className = 'list-action';
+        li.innerHTML = `<button class="btn btn-block" type="button">Remove ${tiny.length} short ${tiny.length === 1 ? 'walk' : 'walks'} (under ${MIN_WALK_M} m)</button>`;
+        armDelete(li.querySelector('button'), async () => {
+          for (const w of tiny) await store.del('walks', w.id);
+          const ids = new Set(tiny.map((w) => w.id));
+          state.walks = state.walks.filter((w) => !ids.has(w.id));
+          renderAll(); fill(); toast(`Removed ${tiny.length} short ${tiny.length === 1 ? 'walk' : 'walks'}`);
+        });
+        ul.prepend(li);
       }
     };
     $('tabMem').onclick = () => { listTab = 'memories'; fill(); };

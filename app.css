@@ -286,3 +286,4 @@ button { font: inherit; color: inherit; }
 .style-bright { background: linear-gradient(135deg, #aad3df 0 35%, #f2efe9 35% 65%, #c8facc 65%); }
 .style-colourful { background: linear-gradient(135deg, #b5d0d0 0 35%, #f7e8c4 35% 65%, #b9e3a8 65%); }
 .style-soft { background: linear-gradient(135deg, #d6e2e6 0 35%, #f4f2ee 35% 65%, #dde8dc 65%); }
+.list li.list-action { cursor: default; border-bottom: 0; padding-bottom: 4px; }
