@@ -287,3 +287,19 @@ button { font: inherit; color: inherit; }
 .style-colourful { background: linear-gradient(135deg, #b5d0d0 0 35%, #f7e8c4 35% 65%, #b9e3a8 65%); }
 .style-soft { background: linear-gradient(135deg, #d6e2e6 0 35%, #f4f2ee 35% 65%, #dde8dc 65%); }
 .list li.list-action { cursor: default; border-bottom: 0; padding-bottom: 4px; }
+
+/* Visited places */
+.poi { position: relative; }
+.poi-check { display: none; }
+.poi.is-visited { opacity: 0.85; }
+.poi.is-visited .poi-check {
+  display: block; position: absolute; right: -5px; bottom: -5px; width: 14px; height: 14px; border-radius: 50%;
+  background: #2b8a3e; border: 2px solid #fff;
+}
+.poi.is-visited .poi-check::after { content: ""; position: absolute; left: 3px; top: 1px; width: 3px; height: 6px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.pills { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 2px 0 6px; }
+.pills .pill { margin: 0; }
+.pill-visited { background: rgba(43, 138, 62, 0.14); color: #2b8a3e; }
+.pill-new { background: var(--sea-soft); color: var(--sea); }
+.chip-visit.on { --c: #2b8a3e; }
+.visited-sw { width: 44px; height: 44px; flex: none; border-radius: 10px; background: rgba(43, 138, 62, 0.14); color: #2b8a3e; display: grid; place-items: center; font-weight: 800; }

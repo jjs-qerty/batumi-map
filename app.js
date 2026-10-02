@@ -734,6 +734,7 @@
       <div class="tabs" role="tablist">
         <button role="tab" type="button" id="tabMem" aria-selected="${listTab === 'memories'}">Memories</button>
         <button role="tab" type="button" id="tabWalk" aria-selected="${listTab === 'walks'}">Walks</button>
+        <button role="tab" type="button" id="tabVisit" aria-selected="${listTab === 'visited'}">Visited</button>
       </div>
       <ul class="list" id="listItems"></ul>
       <label class="switch-row" for="autoRec"><span><b>Record my trail whenever the app is open</b>
@@ -750,7 +751,23 @@
     openSheet('My map', node);
     const fill = () => {
       $('tabMem').setAttribute('aria-selected', listTab === 'memories'); $('tabWalk').setAttribute('aria-selected', listTab === 'walks');
+      $('tabVisit').setAttribute('aria-selected', listTab === 'visited');
       const ul = $('listItems'); ul.innerHTML = '';
+      if (listTab === 'visited') {
+        const vis = places.visitedList();
+        if (!vis.length) { ul.innerHTML = '<li class="empty" style="cursor:default">No visited places yet. Tap a place on the map and choose Mark visited. Taking a photo at a place marks it too.</li>'; return; }
+        for (const v of vis) {
+          const li = document.createElement('li');
+          li.innerHTML = `<span class="visited-sw">✓</span><div class="txt"><div class="t">${esc(v.name)}</div><div class="s">${esc(places.catLabel(v.cat))} · ${fmtDate(v.at)}</div></div>`;
+          li.onclick = () => {
+            closeSheet();
+            const c = Object.keys(CITIES).find((k) => inCity(k, v.lat, v.lng)); if (c && c !== city) setCity(c, false);
+            map.flyTo([v.lat, v.lng], 17);
+          };
+          ul.appendChild(li);
+        }
+        return;
+      }
       const items = listTab === 'memories'
         ? state.memories.slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''))
         : state.walks.slice().sort((a, b) => b.startedAt - a.startedAt);
@@ -803,6 +820,7 @@
     };
     $('tabMem').onclick = () => { listTab = 'memories'; fill(); };
     $('tabWalk').onclick = () => { listTab = 'walks'; fill(); };
+    $('tabVisit').onclick = () => { listTab = 'visited'; fill(); };
     $('autoRec').checked = autoOn();
     $('autoRec').onchange = (e) => {
       try { localStorage.setItem(AUTO_KEY, e.target.checked ? 'on' : 'off'); } catch (err) { /* ignore */ }
@@ -828,7 +846,7 @@
   // ---------- backup ----------
   function exportBackup() {
     const strip = (o) => { const c = { ...o }; delete c._marker; return c; };
-    const data = { app: 'niniko-map', version: 1, exportedAt: new Date().toISOString(), walks: state.walks.map(strip), memories: state.memories.map(strip) };
+    const data = { app: 'niniko-map', version: 1, exportedAt: new Date().toISOString(), walks: state.walks.map(strip), memories: state.memories.map(strip), visited: places.exportVisited() };
     const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = `batumi-map-backup-${todayISO()}.json`;
@@ -845,6 +863,7 @@
       let n = 0;
       for (const w of data.walks || []) { await store.put('walks', w); n++; }
       for (const m of data.memories || []) { await store.put('memories', m); n++; }
+      if (data.visited) places.importVisited(data.visited);
       await load(); closeSheet(); fitAll(); toast(`Restored ${n} items`);
     } catch (err) { toast('That file is not a backup from this app.'); }
   };
@@ -959,6 +978,7 @@
     for (const m of state.memories) { const d = haversine([lat, lng], [m.lat, m.lng]); if (d < bestD) { bestD = d; best = m; } }
     if (best && bestD <= PHOTO_JOIN_M) return addPhotosTo(best, photos);
     const place = places && places.near ? places.near(lat, lng, 60)[0] : null;
+    if (place && places.markVisited(place)) setTimeout(() => toast(`Marked ${place.name} as visited`, 2500), 3600);
     const m = { id: uid(), lat, lng, title: place ? place.name : 'Photo at ' + fmtTime(Date.now()), note: '', date: todayISO(), photos: [], createdAt: Date.now() };
     await addPhotosTo(m, photos, true);
   }

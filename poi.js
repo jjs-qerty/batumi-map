@@ -17,6 +17,7 @@
   const FILTER_KEY = 'niniko.placeFilters.v1';
   const POPULAR_KEY = 'niniko.popularOnly';
   const MAX_MARKERS = 120;
+  const VISITED_KEY = 'niniko.visited.v1';
   const TICKET_SITES = '<a href="https://tkt.ge" target="_blank" rel="noopener">tkt.ge</a> or <a href="https://biletebi.ge" target="_blank" rel="noopener">biletebi.ge</a>';
 
   const I = {
@@ -297,9 +298,18 @@
     }
   }
 
+  // ---------- visited ----------
+  // id -> { at, name, lat, lng, cat }, so visited places can be listed from any city. Older entries are just a time.
+  let visited = {};
+  try { visited = JSON.parse(localStorage.getItem(VISITED_KEY) || '{}') || {}; } catch (e) { visited = {}; }
+  const visitedAt = (v) => (typeof v === 'number' ? v : v && v.at);
+  const saveVisited = () => { try { localStorage.setItem(VISITED_KEY, JSON.stringify(visited)); } catch (e) { /* full */ } };
+  const fmtDay = (ms) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' });
+
   function placeIcon(p) {
-    const c = CAT[p.cat];
-    return L.divIcon({ className: '', html: `<div class="poi" style="--c:${c.color}">${svg(c.icon)}</div>`, iconSize: [26, 26], iconAnchor: [13, 13], popupAnchor: [0, -12] });
+    const c = CAT[p.cat], v = !!visited[p.id];
+    return L.divIcon({ className: '', html: `<div class="poi${v ? ' is-visited' : ''}" style="--c:${c.color}">${svg(c.icon)}<span class="poi-check"></span></div>`,
+      iconSize: [26, 26], iconAnchor: [13, 13], popupAnchor: [0, -12] });
   }
 
   function popupHtml(p) {
@@ -309,6 +319,8 @@
     const site = t.website || t['contact:website'];
     const phone = t.phone || t['contact:phone'];
     const addr = [t['addr:street'], t['addr:housenumber']].filter(Boolean).join(' ');
+    const v = visited[p.id];
+    const visitTag = v ? `<span class="pill pill-visited">Visited · ${esc(fmtDay(visitedAt(v)))}</span>` : '<span class="pill pill-new">Not visited yet</span>';
     let status = '';
     if (st) status = `<span class="pill ${st.open ? 'pill-open' : 'pill-closed'}">${esc(st.text)}</span>`;
     else if (t.opening_hours) status = '<span class="pill">Check hours below</span>';
@@ -329,10 +341,11 @@
     ].filter(Boolean).join(' · ');
     return `<div class="pop"><div class="cat" style="color:${c.color}">${c.one}</div>
       <h3>${esc(p.name)}</h3>${p.alt ? `<div class="when">${esc(p.alt)}</div>` : ''}
-      ${status}${hours}${ticket}
+      <div class="pills">${visitTag}${status}</div>${hours}${ticket}
       ${addr ? `<div class="when">${esc(addr)}</div>` : ''}
       <div class="links">${links}</div>
-      <div class="row"><button class="btn btn-sm" data-act="memory">Add a memory here</button></div></div>`;
+      <div class="row"><button class="btn btn-sm${v ? '' : ' btn-primary'}" data-act="visit">${v ? 'Mark not visited' : 'Mark visited'}</button>
+      <button class="btn btn-sm" data-act="memory">Add a memory</button></div></div>`;
   }
 
   // ---------- layer ----------
@@ -344,6 +357,8 @@
     try { filters = JSON.parse(localStorage.getItem(FILTER_KEY) || 'null'); } catch (e) { filters = null; }
     if (!filters) filters = Object.fromEntries(CATS.map((c) => [c.key, c.on]));
     let openOnly = false;
+    let visitMode = 'all'; // all | todo | done
+    const VISIT_LABEL = { all: 'Visited or not', todo: 'Not visited', done: 'Visited' };
     let popularOnly = true;
     try { popularOnly = localStorage.getItem(POPULAR_KEY) !== 'all'; } catch (e) { /* ignore */ }
 
@@ -351,12 +366,14 @@
     function renderChips() {
       bar.innerHTML = `<button type="button" class="chip chip-open${popularOnly ? ' on' : ''}" data-k="__popular" aria-pressed="${popularOnly}">${popularOnly ? 'Popular only' : 'All places'}</button>` +
         `<button type="button" class="chip chip-open${openOnly ? ' on' : ''}" data-k="__open" aria-pressed="${openOnly}">Open now</button>` +
+        `<button type="button" class="chip chip-visit${visitMode !== 'all' ? ' on' : ''}" data-k="__visit">${VISIT_LABEL[visitMode]}</button>` +
         CATS.map((c) => `<button type="button" class="chip${filters[c.key] ? ' on' : ''}" data-k="${c.key}" style="--c:${c.color}" aria-pressed="${!!filters[c.key]}">${svg(c.icon)}${c.label}</button>`).join('');
     }
     bar.addEventListener('click', (e) => {
       const b = e.target.closest('.chip'); if (!b) return;
       const k = b.dataset.k;
       if (k === '__open') openOnly = !openOnly;
+      else if (k === '__visit') visitMode = visitMode === 'all' ? 'todo' : visitMode === 'todo' ? 'done' : 'all';
       else if (k === '__popular') {
         popularOnly = !popularOnly;
         try { localStorage.setItem(POPULAR_KEY, popularOnly ? 'popular' : 'all'); } catch (err) { /* ignore */ }
@@ -369,7 +386,8 @@
     function render() {
       const z = map.getZoom(), view = map.getBounds().pad(0.3), c = map.getCenter();
       const list = places.filter((p) => filters[p.cat] && (!popularOnly || p.popular) && z >= (MIN_ZOOM[p.cat] || 0) && view.contains([p.lat, p.lng])
-        && (!openOnly || isOpenNow(p.tags.opening_hours) === true));
+        && (!openOnly || isOpenNow(p.tags.opening_hours) === true)
+        && (visitMode === 'all' || (visitMode === 'done') === !!visited[p.id]));
       // Too many markers make the map messy and slow on a phone, so keep the ones nearest the middle of the screen.
       const cos = Math.cos(c.lat * Math.PI / 180), d2 = (p) => ((p.lng - c.lng) * cos) ** 2 + (p.lat - c.lat) ** 2;
       list.sort((a, b) => d2(a) - d2(b));
@@ -380,15 +398,28 @@
         if (shown.has(p.id)) continue;
         const mk = L.marker([p.lat, p.lng], { icon: placeIcon(p), title: p.name, keyboard: true });
         mk.bindPopup(() => popupHtml(p), { maxWidth: 280 });
-        mk.on('popupopen', (e) => {
-          const btn = e.popup.getElement().querySelector('[data-act="memory"]');
-          if (btn) btn.onclick = () => { map.closePopup(); opts.onAddMemory(L.latLng(p.lat, p.lng), p.name); };
-        });
+        mk.on('popupopen', (e) => wirePopup(e.popup, p, mk));
         mk.addTo(layer); shown.set(p.id, mk);
       }
       for (const [id, mk] of shown) if (!keep.has(id) && !mk.isPopupOpen()) { layer.removeLayer(mk); shown.delete(id); }
     }
     let t; map.on('moveend zoomend', () => { clearTimeout(t); t = setTimeout(render, 120); });
+
+    function wirePopup(popup, p, mk) {
+      const el = popup.getElement();
+      el.querySelector('[data-act="memory"]').onclick = () => { map.closePopup(); opts.onAddMemory(L.latLng(p.lat, p.lng), p.name); };
+      el.querySelector('[data-act="visit"]').onclick = () => {
+        setVisited(p, !visited[p.id]);
+        opts.toast && opts.toast(visited[p.id] ? `Marked ${p.name} as visited` : `Marked ${p.name} as not visited`);
+        // Redraw after this tap has finished, or the map treats it as a tap outside the popup and closes it.
+        setTimeout(() => { popup.setContent(popupHtml(p)); wirePopup(popup, p, mk); }, 0);
+      };
+    }
+    function setVisited(p, on) {
+      if (on) visited[p.id] = { at: Date.now(), name: p.name, lat: p.lat, lng: p.lng, cat: p.cat }; else delete visited[p.id];
+      saveVisited();
+      const mk = shown.get(p.id); if (mk) mk.setIcon(placeIcon(p));
+    }
 
     function setPlaces(raw) {
       const seen = new Set();
@@ -423,7 +454,19 @@
       const dist = (p) => { const x = (p.lng - lng) * rad * Math.cos(lat * rad), y = (p.lat - lat) * rad; return Math.sqrt(x * x + y * y) * R; };
       return places.filter((p) => p.popular).map((p) => [dist(p), p]).filter(([d]) => d <= r).sort((a, b) => a[0] - b[0]).map(([, p]) => p);
     }
-    return { render, near, setCity };
+    return {
+      render, near, setCity,
+      // Mark a place visited (used when you take a photo there). Returns the place if it changed.
+      markVisited(p) { if (!p || visited[p.id]) return null; setVisited(p, true); return p; },
+      unmarkVisited(id) { const p = places.find((x) => x.id === id) || { id }; delete visited[id]; saveVisited(); const mk = shown.get(id); if (mk && p.cat) mk.setIcon(placeIcon(p)); },
+      visitedList: () => Object.entries(visited).map(([id, v]) => {
+        const p = places.find((x) => x.id === id);
+        return { id, at: visitedAt(v), name: (v && v.name) || (p && p.name), lat: (v && v.lat) || (p && p.lat), lng: (v && v.lng) || (p && p.lng), cat: (v && v.cat) || (p && p.cat) };
+      }).filter((x) => x.name && x.lat != null).sort((a, b) => b.at - a.at),
+      catLabel: (cat) => (CAT[cat] ? CAT[cat].one : 'Place'),
+      exportVisited: () => ({ ...visited }),
+      importVisited(v) { Object.assign(visited, v || {}); saveVisited(); layer.clearLayers(); shown.clear(); render(); },
+    };
   }
 
   window.NinikoPlaces = { init, _test: { parseHours, openStatus, isOpenAt } };
