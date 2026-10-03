@@ -325,11 +325,30 @@
     jumps: 0,            // GPS jumps skipped in a row
   };
 
+  // ---------- one city at a time ----------
+  // Walks, memories and visited places belong to the city they are in (a walk goes by where it started).
+  // Worked out from the location, so everything saved before this still sorts itself into the right city.
+  const cityOf = (lat, lng) => Object.keys(CITIES).find((k) => inCity(k, lat, lng)) || null;
+  const walkCity = (w) => (w.points.length ? cityOf(w.points[0][0], w.points[0][1]) : null);
+  // key is a city key or 'all'.
+  function scope(key) {
+    const inIt = (c) => key === 'all' || c === key;
+    return {
+      key, name: key === 'all' ? 'All cities' : CITIES[key].name,
+      walks: state.walks.filter((w) => inIt(walkCity(w))),
+      memories: state.memories.filter((m) => inIt(cityOf(m.lat, m.lng))),
+      visited: places.visitedList().filter((v) => inIt(cityOf(v.lat, v.lng))),
+    };
+  }
+
   // ---------- rendering ----------
+  // The title bar shows the totals for the city you're looking at.
   function renderStats() {
-    let km = state.walks.reduce((s, w) => s + (w.distance || 0), 0);
-    if (state.recording) km += trailLength(state.recording.points); // count the walk in progress too
-    $('stats').innerHTML = `<span class="sw" style="background:${walkColor()}"></span><b>${fmtDist(km)}</b> walked · <b>${state.memories.length}</b> ${state.memories.length === 1 ? 'memory' : 'memories'}`;
+    const walks = state.walks.filter((w) => walkCity(w) === city), mems = state.memories.filter((m) => cityOf(m.lat, m.lng) === city);
+    let km = walks.reduce((s, w) => s + (w.distance || 0), 0);
+    const rp = state.recording && state.recording.points;
+    if (rp && (!rp.length || cityOf(rp[0][0], rp[0][1]) === city)) km += trailLength(rp); // count the walk in progress too
+    $('stats').innerHTML = `<span class="sw" style="background:${walkColor()}"></span><b>${fmtDist(km)}</b> walked · <b>${mems.length}</b> ${mems.length === 1 ? 'memory' : 'memories'}`;
   }
 
   function renderWalks() {
@@ -820,15 +839,15 @@
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
   // Everything that happened on each day: walks, memories (by their date) and places marked visited.
-  function journalDays() {
+  function journalDays(sc) {
     const days = new Map();
     const day = (k) => { if (!days.has(k)) days.set(k, { key: k, walks: [], memories: [], visited: [], dist: 0, ms: 0, photos: 0 }); return days.get(k); };
-    for (const w of state.walks) {
+    for (const w of sc.walks) {
       const d = day(dayKey(w.startedAt, w.points.length ? tzAt(w.points[0][0], w.points[0][1]) : undefined)); d.walks.push(w); d.dist += w.distance || 0;
       if (!w.drawn && w.endedAt) d.ms += w.endedAt - w.startedAt;
     }
-    for (const m of state.memories) { const d = day(m.date || dayKey(m.createdAt || Date.now(), tzAt(m.lat, m.lng))); d.memories.push(m); d.photos += photosOf(m).length; }
-    for (const v of places.visitedList()) if (v.at) day(dayKey(v.at, tzAt(v.lat, v.lng))).visited.push(v);
+    for (const m of sc.memories) { const d = day(m.date || dayKey(m.createdAt || Date.now(), tzAt(m.lat, m.lng))); d.memories.push(m); d.photos += photosOf(m).length; }
+    for (const v of sc.visited) if (v.at) day(dayKey(v.at, tzAt(v.lat, v.lng))).visited.push(v);
     return [...days.values()].sort((a, b) => b.key.localeCompare(a.key));
   }
   function daySummary(d) {
@@ -838,9 +857,9 @@
   }
 
   // Show one day on the map: its walks and memories stand out, everything else fades.
-  function showDay(key) {
+  function showDay(key, sc) {
     closeSheet(); map.closePopup(); if (state.mode !== 'idle') cancelMode();
-    const d = journalDays().find((x) => x.key === key); if (!d) return;
+    const d = journalDays(sc).find((x) => x.key === key); if (!d) return;
     setMode('day');
     const pts = [];
     d.walks.forEach((w) => w.points.forEach((p) => pts.push([p[0], p[1]])));
@@ -921,15 +940,15 @@
   }
 
   // Trip stats: totals, favourite districts, when you like to walk, best days.
-  function openStats() {
-    const days = journalDays();
-    const total = state.walks.reduce((n, w) => n + (w.distance || 0), 0);
-    const photos = state.memories.reduce((n, m) => n + photosOf(m).length, 0);
-    const longest = state.walks.slice().sort((a, b) => (b.distance || 0) - (a.distance || 0))[0];
+  function openStats(sc) {
+    const days = journalDays(sc);
+    const total = sc.walks.reduce((n, w) => n + (w.distance || 0), 0);
+    const photos = sc.memories.reduce((n, m) => n + photosOf(m).length, 0);
+    const longest = sc.walks.slice().sort((a, b) => (b.distance || 0) - (a.distance || 0))[0];
     const best = days.filter((d) => d.dist).sort((a, b) => b.dist - a.dist)[0];
     // Time of day, from the recorded points' times.
     const parts = [['Morning', 5, 12], ['Afternoon', 12, 17], ['Evening', 17, 22], ['Night', 22, 29]], byPart = [0, 0, 0, 0];
-    for (const w of state.walks) {
+    for (const w of sc.walks) {
       if (w.drawn) continue;
       for (let i = 1; i < w.points.length; i++) {
         const t = w.points[i][2]; if (!t) continue;
@@ -957,13 +976,13 @@
       <ul class="facts">
         ${best ? `<li>Biggest day: <b>${esc(fmtDayLong(best.key))}</b>, ${fmtDist(best.dist)}</li>` : ''}
         ${longest && longest.distance ? `<li>Longest walk: <b>${esc(longest.name)}</b>, ${fmtDist(longest.distance)}</li>` : ''}
-        <li>Places visited: <b>${places.visitedList().length}</b></li>
-        <li>Memories saved: <b>${state.memories.length}</b></li>
+        <li>Places visited: <b>${sc.visited.length}</b></li>
+        <li>Memories saved: <b>${sc.memories.length}</b></li>
       </ul>`);
-    openSheet('Trip stats', node);
-    favouriteDistricts().then((rows) => {
+    openSheet(sc.key === 'all' ? 'Trip stats' : `Trip stats · ${sc.name}`, node);
+    favouriteDistricts(sc.walks).then((rows) => {
       const box = $('statDistricts'); if (!box) return;
-      if (!rows.length) { box.textContent = state.walks.length ? 'District names aren\'t available for where you walked yet.' : 'Go for a walk and your favourite districts show up here.'; return; }
+      if (!rows.length) { box.textContent = sc.walks.length ? 'District names aren\'t available for where you walked yet.' : 'Go for a walk and your favourite districts show up here.'; return; }
       const sum = rows.reduce((n, r) => n + r.dist, 0);
       box.className = '';
       box.innerHTML = `<p class="fav">Your favourite: <b>${esc(rows[0].name)}</b>
@@ -971,14 +990,14 @@
     }).catch(() => { const box = $('statDistricts'); if (box) box.textContent = 'Couldn\'t look up district names right now. Try again when you are online.'; });
   }
   // Each stretch of walking counts for the nearest named district or neighbourhood (within 3 km).
-  async function favouriteDistricts() {
+  async function favouriteDistricts(walks) {
     const totals = new Map();
-    const cities = Object.keys(CITIES).filter((c) => state.walks.some((w) => w.points.length && inCity(c, w.points[0][0], w.points[0][1])));
+    const cities = Object.keys(CITIES).filter((c) => walks.some((w) => walkCity(w) === c));
     for (const c of cities) {
       const list = await NinikoPlaces.districts(c);
       if (!list.length) continue;
-      for (const w of state.walks) {
-        if (!w.points.length || !inCity(c, w.points[0][0], w.points[0][1])) continue;
+      for (const w of walks) {
+        if (walkCity(w) !== c) continue;
         const line = w.drawn ? w.points : smoothed(w.points);
         for (let i = 1; i < line.length; i++) {
           const mid = [(line[i - 1][0] + line[i][0]) / 2, (line[i - 1][1] + line[i][1]) / 2];
@@ -1060,14 +1079,19 @@
 
   // ---------- "My map" sheet ----------
   let listTab = 'days';
-  function openList() {
+  // cityKey: which city's diary to show (a city key or 'all'); it opens on the city you're looking at.
+  function openList(cityKey) {
     if (state.mode !== 'idle') cancelMode();
-    const km = state.walks.reduce((s, w) => s + (w.distance || 0), 0);
+    const sc = scope(cityKey || city);
+    const km = sc.walks.reduce((s, w) => s + (w.distance || 0), 0);
     const node = h(`
+      <div class="tabs city-tabs" role="tablist" aria-label="City">
+        ${Object.keys(CITIES).concat('all').map((k) => `<button role="tab" type="button" data-city="${k}" aria-selected="${k === sc.key}">${k === 'all' ? 'All' : esc(CITIES[k].name)}</button>`).join('')}
+      </div>
       <div class="summary">
         <div><b>${fmtDist(km)}</b><span>walked</span></div>
-        <div><b>${state.walks.length}</b><span>${state.walks.length === 1 ? 'walk' : 'walks'}</span></div>
-        <div><b>${state.memories.length}</b><span>${state.memories.length === 1 ? 'memory' : 'memories'}</span></div>
+        <div><b>${sc.walks.length}</b><span>${sc.walks.length === 1 ? 'walk' : 'walks'}</span></div>
+        <div><b>${sc.memories.length}</b><span>${sc.memories.length === 1 ? 'memory' : 'memories'}</span></div>
       </div>
       <button class="btn btn-block" type="button" id="openStats">Trip stats: favourite district, best days</button>
       <div class="tabs" role="tablist">
@@ -1088,26 +1112,27 @@
         <button class="btn" type="button" id="moreImport">Restore a backup</button>
       </div>
       <p class="note">Everything is kept on this phone only. Save a backup now and then so nothing is lost if the phone or browser is reset.</p>`);
-    openSheet('My map', node);
+    openSheet(sc.key === 'all' ? 'My map' : `My map · ${sc.name}`, node);
+    node.querySelectorAll('.city-tabs [data-city]').forEach((b) => { b.onclick = () => openList(b.dataset.city); });
     const fill = () => {
       $('tabMem').setAttribute('aria-selected', listTab === 'memories'); $('tabWalk').setAttribute('aria-selected', listTab === 'walks');
       $('tabVisit').setAttribute('aria-selected', listTab === 'visited'); $('tabDays').setAttribute('aria-selected', listTab === 'days');
       const ul = $('listItems'); ul.innerHTML = '';
       if (listTab === 'days') {
-        const days = journalDays();
-        if (!days.length) { ul.innerHTML = '<li class="empty" style="cursor:default">Your trip diary fills in here, one line per day you walked or saved a memory.</li>'; return; }
+        const days = journalDays(sc);
+        if (!days.length) { ul.innerHTML = `<li class="empty" style="cursor:default">${sc.key === 'all' ? 'Your trip diary fills in here, one line per day you walked or saved a memory.' : `Nothing saved in ${esc(sc.name)} yet. Your days here show up as you walk and save memories.`}</li>`; return; }
         for (const d of days) {
           const li = document.createElement('li');
           const full = d.memories.map((m) => photosOf(m)[0]).find(Boolean), thumb = full && (thumbOf(full) || full);
           li.innerHTML = `${thumb ? `<img class="thumb" src="${thumb}" alt="">` : '<span class="walk-sw"></span>'}
             <div class="txt"><div class="t">${esc(fmtDayLong(d.key))}</div><div class="s">${esc(daySummary(d))}</div></div>`;
-          li.onclick = () => showDay(d.key);
+          li.onclick = () => showDay(d.key, sc);
           ul.appendChild(li);
         }
         return;
       }
       if (listTab === 'visited') {
-        const vis = places.visitedList();
+        const vis = sc.visited;
         if (!vis.length) { ul.innerHTML = '<li class="empty" style="cursor:default">No visited places yet. Tap a place on the map and choose Mark visited. Taking a photo at a place marks it too.</li>'; return; }
         for (const v of vis) {
           const li = document.createElement('li');
@@ -1122,8 +1147,8 @@
         return;
       }
       const items = listTab === 'memories'
-        ? state.memories.slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''))
-        : state.walks.slice().sort((a, b) => b.startedAt - a.startedAt);
+        ? sc.memories.slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+        : sc.walks.slice().sort((a, b) => b.startedAt - a.startedAt);
       if (!items.length) {
         ul.innerHTML = `<li class="empty" style="cursor:default">${listTab === 'memories'
           ? 'No memories yet. Tap Memory to pin the first place that means something.'
@@ -1150,15 +1175,15 @@
         }
         ul.appendChild(li);
       }
-      const nPhotos = listTab === 'memories' ? state.memories.reduce((n, m) => n + photosOf(m).length, 0) : 0;
+      const nPhotos = listTab === 'memories' ? sc.memories.reduce((n, m) => n + photosOf(m).length, 0) : 0;
       if (nPhotos) {
         const li = document.createElement('li'); li.className = 'list-action';
         li.innerHTML = `<button class="btn btn-block" type="button">Download all ${nPhotos} ${nPhotos === 1 ? 'photo' : 'photos'}</button>`;
-        li.querySelector('button').onclick = () => downloadPhotos(state.memories.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')), `Niniko's Map photos ${todayISO()}.zip`);
+        li.querySelector('button').onclick = () => downloadPhotos(sc.memories.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')), `Niniko's Map ${sc.key === 'all' ? '' : sc.name + ' '}photos ${todayISO()}.zip`);
         ul.prepend(li);
       }
       // Offer to clear out tiny walks saved by older versions of the app.
-      const tiny = listTab === 'walks' ? state.walks.filter((w) => !w.drawn && isTinyWalk(w.points, w.distance)) : [];
+      const tiny = listTab === 'walks' ? sc.walks.filter((w) => !w.drawn && isTinyWalk(w.points, w.distance)) : [];
       if (tiny.length) {
         const li = document.createElement('li'); li.className = 'list-action';
         li.innerHTML = `<button class="btn btn-block" type="button">Remove ${tiny.length} short ${tiny.length === 1 ? 'walk' : 'walks'} (under ${MIN_WALK_M} m)</button>`;
@@ -1166,7 +1191,7 @@
           for (const w of tiny) await store.del('walks', w.id);
           const ids = new Set(tiny.map((w) => w.id));
           state.walks = state.walks.filter((w) => !ids.has(w.id));
-          renderAll(); fill(); toast(`Removed ${tiny.length} short ${tiny.length === 1 ? 'walk' : 'walks'}`);
+          renderAll(); openList(sc.key); toast(`Removed ${tiny.length} short ${tiny.length === 1 ? 'walk' : 'walks'}`);
         });
         ul.prepend(li);
       }
@@ -1174,7 +1199,7 @@
     $('tabMem').onclick = () => { listTab = 'memories'; fill(); };
     $('tabWalk').onclick = () => { listTab = 'walks'; fill(); };
     $('tabDays').onclick = () => { listTab = 'days'; fill(); };
-    $('openStats').onclick = openStats;
+    $('openStats').onclick = () => openStats(sc);
     $('tabVisit').onclick = () => { listTab = 'visited'; fill(); };
     $('autoRec').checked = autoOn();
     $('autoRec').onchange = (e) => {
@@ -1187,7 +1212,7 @@
     $('moreImport').onclick = () => $('importFile').click();
     fill();
   }
-  $('btnList').onclick = openList;
+  $('btnList').onclick = () => openList();
 
   function fitAll() {
     // Only what you saved in the current city, so the map doesn't zoom out across Georgia.
@@ -1268,7 +1293,7 @@
     if (!CITIES[c]) return;
     city = c;
     try { localStorage.setItem(CITY_KEY, c); } catch (e) { /* ignore */ }
-    renderCity();
+    renderCity(); renderStats();
     places.setCity(c);
     if (fly) map.setView(CITIES[c].center, 15); // the cities are far apart, so jump instead of a long fly
   }
