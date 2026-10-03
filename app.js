@@ -4,17 +4,19 @@
 
   // Cities the map knows. center is [lat, lng]; box is [south, west, north, east].
   const CITIES = {
-    batumi: { name: 'Batumi', local: 'ბათუმი', center: [41.6430, 41.6360], box: [41.565, 41.555, 41.700, 41.720], tz: 'Asia/Tbilisi' },
-    tbilisi: { name: 'Tbilisi', local: 'თბილისი', center: [41.6925, 44.8030], box: [41.640, 44.700, 41.800, 44.920], tz: 'Asia/Tbilisi' },
+    batumi: { name: 'Batumi', country: 'Georgia', center: [41.6430, 41.6360], box: [41.565, 41.555, 41.700, 41.720], tz: 'Asia/Tbilisi' },
+    tbilisi: { name: 'Tbilisi', country: 'Georgia', center: [41.6925, 44.8030], box: [41.640, 44.700, 41.800, 44.920], tz: 'Asia/Tbilisi' },
     // Ayia Napa town with Cape Greco and Protaras. Cyprus time (UTC+2, +3 in summer).
-    ayianapa: { name: 'Ayia Napa', local: 'Αγία Νάπα', center: [34.9886, 33.9997], box: [34.955, 33.920, 35.035, 34.095], tz: 'Asia/Nicosia' },
+    ayianapa: { name: 'Ayia Napa', country: 'Cyprus', center: [34.9886, 33.9997], box: [34.955, 33.920, 35.035, 34.095], tz: 'Asia/Nicosia' },
   };
   const CITY_KEY = 'niniko.city';
   let city = (() => { try { return CITIES[localStorage.getItem(CITY_KEY)] ? localStorage.getItem(CITY_KEY) : 'batumi'; } catch (e) { return 'batumi'; } })();
   const inCity = (c, lat, lng) => { const b = CITIES[c].box; return lat >= b[0] && lat <= b[2] && lng >= b[1] && lng <= b[3]; };
   // Times on the map are shown in the local time of the city where they happened, whatever the phone is set to.
   const tzAt = (lat, lng) => { const c = Object.keys(CITIES).find((k) => inCity(k, lat, lng)); return c ? CITIES[c].tz : undefined; };
-  function inTz(opts, tz) { try { return new Intl.DateTimeFormat(undefined, { ...opts, timeZone: tz }); } catch (e) { return new Intl.DateTimeFormat(undefined, opts); } }
+  // Dates and times are always written in English, whatever language the phone uses.
+  const LOCALE = 'en-GB';
+  function inTz(opts, tz) { try { return new Intl.DateTimeFormat(LOCALE, { ...opts, timeZone: tz }); } catch (e) { return new Intl.DateTimeFormat(LOCALE, opts); } }
   function dayKey(ms, tz) {
     try { return new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: tz }).format(ms); }
     catch (e) { return new Date(ms - new Date(ms).getTimezoneOffset() * 60000).toISOString().slice(0, 10); }
@@ -102,7 +104,7 @@
   }
   function fmtDate(isoOrMs) {
     const d = typeof isoOrMs === 'number' ? new Date(isoOrMs) : new Date(isoOrMs + 'T12:00:00');
-    return d.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' });
+    return d.toLocaleDateString(LOCALE, { day: 'numeric', month: 'long', year: 'numeric' });
   }
   // Memories hold a list of photos; older ones saved a single "photo".
   const photosOf = (m) => (m.photos && m.photos.length ? m.photos : (m.photo ? [m.photo] : []));
@@ -163,21 +165,25 @@
   // Keep popups clear of the title, filter chips and bottom toolbar when they open.
   L.Popup.mergeOptions({ autoPanPaddingTopLeft: L.point(12, 170), autoPanPaddingBottomRight: L.point(12, 110) });
   const map = L.map('map', { zoomControl: false, attributionControl: true }).setView(CITIES[city].center, 15);
-  // Free map styles that need no key. "Bright" is the plain OpenStreetMap map in full colour.
+  // Free map styles that need no key. "English" (the default) labels streets and places in English;
+  // the OpenStreetMap styles use the local language (Georgian, Greek).
   const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
   const BASEMAPS = {
-    bright: { name: 'Bright', note: 'Full-colour OpenStreetMap: green parks, blue sea, clear streets.',
+    english: { name: 'English', note: 'Bright street map with names in English.',
+      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', maxZoom: 19, cls: 'tiles-bright',
+      attribution: 'Tiles &copy; Esri, sources: Esri, HERE, Garmin, ' + OSM_ATTR + ' contributors' },
+    bright: { name: 'Bright', note: 'Full-colour OpenStreetMap. Names in the local language.',
       url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', maxZoom: 19, cls: 'tiles-bright', attribution: OSM_ATTR },
-    colourful: { name: 'Colourful', note: 'OpenStreetMap France style: warmer colours and more shop and café icons.',
+    colourful: { name: 'Colourful', note: 'OpenStreetMap France style with more shop and café icons. Names in the local language.',
       url: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png', subdomains: 'abc', maxZoom: 20, cls: 'tiles-bright',
       attribution: OSM_ATTR + ', tiles by <a href="https://www.openstreetmap.fr" target="_blank" rel="noopener">OSM France</a>' },
-    soft: { name: 'Soft', note: 'The earlier calm look with faded colours.',
+    soft: { name: 'Soft', note: 'The earlier calm look with faded colours. Names in the local language.',
       url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', maxZoom: 19, cls: 'tiles-soft', attribution: OSM_ATTR },
   };
-  const BASEMAP_KEY = 'niniko.basemap';
-  let baseKey = 'bright', baseLayer = null;
+  const BASEMAP_KEY = 'niniko.basemap.v2'; // v2: English became the default for everyone
+  let baseKey = 'english', baseLayer = null;
   try { if (BASEMAPS[localStorage.getItem(BASEMAP_KEY)]) baseKey = localStorage.getItem(BASEMAP_KEY); } catch (e) { /* ignore */ }
-  function setBasemap(key) {
+  function setBasemap(key, save = true) {
     const b = BASEMAPS[key] || BASEMAPS.bright;
     if (baseLayer) map.removeLayer(baseLayer);
     baseKey = key;
@@ -188,10 +194,10 @@
       const layer = baseLayer;
       layer.on('tileload', () => { ok++; });
       layer.on('tileerror', () => {
-        if (++bad >= 4 && ok === 0 && baseLayer === layer) { setBasemap('bright'); toast(`The ${b.name} map isn't loading right now, so I switched back to Bright.`, 4500); }
+        if (++bad >= 4 && ok === 0 && baseLayer === layer) { setBasemap('bright', false); toast(`The ${b.name} map isn't loading right now, so this is the Bright map for now.`, 4500); }
       });
     }
-    try { localStorage.setItem(BASEMAP_KEY, baseKey); } catch (e) { /* ignore */ }
+    if (save) try { localStorage.setItem(BASEMAP_KEY, baseKey); } catch (e) { /* ignore */ }
   }
   setBasemap(baseKey);
   const darkQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
@@ -522,7 +528,7 @@
     }
     const last = rec.points[rec.points.length - 1][2];
     const w = {
-      id: rec.id, name: 'Walk on ' + new Date(rec.startedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }),
+      id: rec.id, name: 'Walk on ' + new Date(rec.startedAt).toLocaleDateString(LOCALE, { day: 'numeric', month: 'short' }),
       startedAt: rec.startedAt, endedAt: quiet && last ? last : Date.now(), points: rec.points, distance: dist,
     };
     return store.put('walks', w).then(() => {
@@ -580,7 +586,7 @@
     if (!d || d.points.length < 2) { toast('Tap at least two points first.'); return; }
     const pts = d.points.map((p) => [p[0], p[1]]);
     const now = Date.now();
-    const w = { id: uid(), name: 'Walk on ' + new Date(now).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }), startedAt: now, points: pts, distance: pathLength(pts), drawn: true };
+    const w = { id: uid(), name: 'Walk on ' + new Date(now).toLocaleDateString(LOCALE, { day: 'numeric', month: 'short' }), startedAt: now, points: pts, distance: pathLength(pts), drawn: true };
     cancelMode();
     await store.put('walks', w); state.walks.push(w); renderAll();
     openWalkForm(w, false); $('sheetTitle').textContent = 'Name this walk';
@@ -684,8 +690,8 @@
   }
 
   // ---------- trip journal: days, replay, stats ----------
-  const fmtDayLong = (key) => new Date(key + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-  const fmtDayShort = (key) => new Date(key + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+  const fmtDayLong = (key) => new Date(key + 'T12:00:00').toLocaleDateString(LOCALE, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const fmtDayShort = (key) => new Date(key + 'T12:00:00').toLocaleDateString(LOCALE, { weekday: 'short', day: 'numeric', month: 'short' });
   function fmtSpan(ms) { const m = Math.round(ms / 60000), h = Math.floor(m / 60); return h ? `${h} h ${m % 60} min` : `${m} min`; }
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
@@ -836,7 +842,7 @@
       if (!rows.length) { box.textContent = state.walks.length ? 'District names aren\'t available for where you walked yet.' : 'Go for a walk and your favourite districts show up here.'; return; }
       const sum = rows.reduce((n, r) => n + r.dist, 0);
       box.className = '';
-      box.innerHTML = `<p class="fav">Your favourite: <b>${esc(rows[0].name)}</b>${rows[0].local && rows[0].local !== rows[0].name ? ` <span class="note">${esc(rows[0].local)}</span>` : ''}
+      box.innerHTML = `<p class="fav">Your favourite: <b>${esc(rows[0].name)}</b>
         <span class="note">(${Math.round(rows[0].dist / sum * 100)}% of your walking)</span></p>` + bars(rows.slice(0, 5).map((r) => [r.name, r.dist]));
     }).catch(() => { const box = $('statDistricts'); if (box) box.textContent = 'Couldn\'t look up district names right now. Try again when you are online.'; });
   }
@@ -855,7 +861,7 @@
           let best = null, bestD = 3000;
           for (const dd of list) { const dist = haversine(mid, [dd.lat, dd.lng]); if (dist < bestD) { bestD = dist; best = dd; } }
           if (!best) continue;
-          const k = best.name, row = totals.get(k) || { name: best.name, local: best.local, dist: 0 };
+          const k = best.name, row = totals.get(k) || { name: best.name, dist: 0 };
           row.dist += haversine(line[i - 1], line[i]); totals.set(k, row);
         }
       }
@@ -900,9 +906,7 @@
     return new Blob([...parts, ...central, end], { type: 'application/zip' });
   }
   // Some phones refuse download names that aren't plain Latin, so Georgian is spelled out in Latin letters.
-  const KA = 'ა a ბ b გ g დ d ე e ვ v ზ z თ t ი i კ k ლ l მ m ნ n ო o პ p ჟ zh რ r ს s ტ t უ u ფ p ქ k ღ gh ყ q შ sh ჩ ch ც ts ძ dz წ ts ჭ ch ხ kh ჯ j ჰ h'.split(' ');
-  const KA_MAP = Object.fromEntries(KA.reduce((acc, x, i) => (i % 2 ? acc : acc.concat([[x, KA[i + 1]]])), []));
-  const latinName = (s) => s.replace(/[\u10d0-\u10ff]/g, (c) => KA_MAP[c] || '').replace(/[^\x20-\x7e]/g, '').replace(/\s+/g, ' ').trim();
+  const latinName = (s) => NinikoPlaces.toLatin(s).replace(/[^\x20-\x7e]/g, '').replace(/\s+/g, ' ').trim();
   function saveBlob(blob, name) {
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = latinName(name) || 'photos';
     document.body.appendChild(a); a.click(); a.remove();
@@ -1123,7 +1127,7 @@
 
   // ---------- cities ----------
   function renderCity() {
-    $('brandCity').textContent = CITIES[city].local;
+    $('brandCity').textContent = CITIES[city].name;
     $('brand').setAttribute('aria-label', `${CITIES[city].name}. Change city`);
     $('map').setAttribute('aria-label', `Map of ${CITIES[city].name}`);
   }
@@ -1138,7 +1142,7 @@
   $('brand').onclick = () => {
     if (state.mode !== 'idle') cancelMode();
     const node = h(`<div class="city-list">${Object.entries(CITIES).map(([k, c]) =>
-      `<button type="button" class="city-btn${k === city ? ' on' : ''}" data-city="${k}"><b>${c.name}</b><span>${c.local}</span></button>`).join('')}</div>
+      `<button type="button" class="city-btn${k === city ? ' on' : ''}" data-city="${k}"><b>${c.name}</b><span>${c.country}</span></button>`).join('')}</div>
       <p class="note">Your walks and memories stay on the map in every city.</p>`);
     openSheet('Choose a city', node);
     node.querySelectorAll('[data-city]').forEach((b) => { b.onclick = () => { closeSheet(); setCity(b.dataset.city, true); }; });

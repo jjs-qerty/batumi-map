@@ -245,7 +245,7 @@
       `nwr[leisure~"^(park|water_park|stadium)$"]${b};nwr[historic~"^(castle|fort)$"]${b};` +
       ');out center tags;';
   }
-  const KEEP = ['name', 'name:en', 'name:ka', 'name:ru', 'opening_hours', 'fee', 'charge', 'website', 'contact:website', 'phone', 'contact:phone',
+  const KEEP = ['name', 'name:en', 'int_name', 'name:ka', 'name:ru', 'opening_hours', 'fee', 'charge', 'website', 'contact:website', 'phone', 'contact:phone',
     'addr:street', 'addr:housenumber', 'cuisine', 'wikidata', 'wikipedia', 'brand', 'stars', 'tourism', 'amenity', 'leisure', 'historic', 'garden_type', 'healthcare', 'emergency', 'description'];
 
   function slim(json) {
@@ -285,7 +285,7 @@
     const b = '(' + BBOX[city] + ')';
     const json = await overpass(`[out:json][timeout:40];nwr[place~"^(suburb|neighbourhood|quarter)$"][name]${b};out center tags;`);
     const items = (json.elements || []).map((e) => ({
-      name: (e.tags && (e.tags['name:en'] || e.tags.name)) || '', local: (e.tags && e.tags.name) || '',
+      name: e.tags ? englishName(e.tags) : '',
       lat: e.lat ?? (e.center && e.center.lat), lng: e.lon ?? (e.center && e.center.lon),
     })).filter((d) => d.name && d.lat != null);
     try { localStorage.setItem(key, JSON.stringify({ at: Date.now(), items })); } catch (e) { /* full */ }
@@ -300,12 +300,35 @@
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const svg = (paths) => `<svg viewBox="0 0 24 24" aria-hidden="true">${paths}</svg>`;
 
+  // ---------- English names ----------
+  // Places without an English name get their local name spelled in Latin letters (Georgian, Greek, Russian).
+  const pairs = (str) => { const a = str.split(' '), m = {}; for (let i = 0; i < a.length; i += 2) m[a[i]] = a[i + 1]; return m; };
+  const KA = pairs('ა a ბ b გ g დ d ე e ვ v ზ z თ t ი i კ k ლ l მ m ნ n ო o პ p ჟ zh რ r ს s ტ t უ u ფ p ქ k ღ gh ყ q შ sh ჩ ch ც ts ძ dz წ ts ჭ ch ხ kh ჯ j ჰ h');
+  const EL = pairs('α a β v γ g δ d ε e ζ z η i θ th ι i κ k λ l μ m ν n ξ x ο o π p ρ r σ s ς s τ t υ y φ f χ ch ψ ps ω o');
+  const RU = pairs('а a б b в v г g д d е e ё yo ж zh з z и i й y к k л l м m н n о o п p р r с s т t у u ф f х kh ц ts ч ch ш sh щ shch ъ _ ы y ь _ э e ю yu я ya');
+  function toLatin(str) {
+    if (!str || /^[\x20-\x7e\u00c0-\u024f]*$/.test(str)) return str || '';
+    const plain = str.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    let out = '';
+    for (const ch of plain) {
+      const lo = ch.toLowerCase(), up = ch !== lo;
+      let r = KA[ch] ?? EL[lo] ?? RU[lo];
+      if (r === '_') r = '';
+      if (r == null) { out += ch; continue; }
+      out += up && r ? r[0].toUpperCase() + r.slice(1) : r;
+    }
+    out = out.replace(/[^\x20-\x7e\u00c0-\u024f]/g, '').replace(/\s+/g, ' ').trim();
+    // Georgian has no capital letters, so start each word with one.
+    return out.replace(/(^|[\s(\-"«])([a-z])/g, (m0, a, b) => a + b.toUpperCase());
+  }
+  const englishName = (t) => t['name:en'] || t.int_name || toLatin(t.name || t['name:ka'] || '');
+
   function decorate(raw) {
     const t = raw.tags, cat = categorize(t);
     if (!cat) return null;
-    const name = t['name:en'] || t.name;
-    const alt = t.name && t.name !== name ? t.name : (t['name:ka'] && t['name:ka'] !== name ? t['name:ka'] : '');
-    const p = { ...raw, cat, name, alt };
+    const name = englishName(t);
+    if (!name) return null;
+    const p = { ...raw, cat, name };
     p.popular = isPopular(p);
     return p;
   }
@@ -335,7 +358,7 @@
   try { visited = JSON.parse(localStorage.getItem(VISITED_KEY) || '{}') || {}; } catch (e) { visited = {}; }
   const visitedAt = (v) => (typeof v === 'number' ? v : v && v.at);
   const saveVisited = () => { try { localStorage.setItem(VISITED_KEY, JSON.stringify(visited)); } catch (e) { /* full */ } };
-  const fmtDay = (ms) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' });
+  const fmtDay = (ms) => new Date(ms).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
 
   function placeIcon(p) {
     const c = CAT[p.cat], v = !!visited[p.id];
@@ -371,7 +394,7 @@
       phone ? `<a href="tel:${esc(phone.split(/[;,]/)[0].replace(/\s/g, ''))}">${esc(phone.split(/[;,]/)[0])}</a>` : '',
     ].filter(Boolean).join(' · ');
     return `<div class="pop"><div class="cat" style="color:${c.color}">${c.one}</div>
-      <h3>${esc(p.name)}</h3>${p.alt ? `<div class="when">${esc(p.alt)}</div>` : ''}
+      <h3>${esc(p.name)}</h3>
       <div class="pills">${visitTag}${status}</div>${hours}${ticket}
       ${addr ? `<div class="when">${esc(addr)}</div>` : ''}
       <div class="links">${links}</div>
@@ -458,7 +481,7 @@
       places = raw.map(decorate).filter(Boolean);
       places.forEach((p) => { const k = findCurated(p); if (k) seen.add(k.name); });
       // Make sure the main paid sights are on the map even if OSM names them differently.
-      for (const k of TICKETS) if (!seen.has(k.name)) places.push({ id: 'k-' + k.name, lat: k.lat, lng: k.lng, cat: k.cat, name: k.name, alt: '', popular: true, tags: { name: k.name } });
+      for (const k of TICKETS) if (!seen.has(k.name)) places.push({ id: 'k-' + k.name, lat: k.lat, lng: k.lng, cat: k.cat, name: k.name, popular: true, tags: { name: k.name } });
       render();
     }
 
@@ -492,7 +515,7 @@
       unmarkVisited(id) { const p = places.find((x) => x.id === id) || { id }; delete visited[id]; saveVisited(); const mk = shown.get(id); if (mk && p.cat) mk.setIcon(placeIcon(p)); },
       visitedList: () => Object.entries(visited).map(([id, v]) => {
         const p = places.find((x) => x.id === id);
-        return { id, at: visitedAt(v), name: (v && v.name) || (p && p.name), lat: (v && v.lat) || (p && p.lat), lng: (v && v.lng) || (p && p.lng), cat: (v && v.cat) || (p && p.cat) };
+        return { id, at: visitedAt(v), name: toLatin((p && p.name) || (v && v.name)), lat: (v && v.lat) || (p && p.lat), lng: (v && v.lng) || (p && p.lng), cat: (v && v.cat) || (p && p.cat) };
       }).filter((x) => x.name && x.lat != null).sort((a, b) => b.at - a.at),
       catLabel: (cat) => (CAT[cat] ? CAT[cat].one : 'Place'),
       exportVisited: () => ({ ...visited }),
@@ -500,5 +523,5 @@
     };
   }
 
-  window.NinikoPlaces = { init, districts, _test: { parseHours, openStatus, isOpenAt } };
+  window.NinikoPlaces = { init, districts, toLatin, _test: { parseHours, openStatus, isOpenAt } };
 })();

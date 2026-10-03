@@ -317,3 +317,4 @@ button { font: inherit; color: inherit; }
 .bar i { display: block; height: 100%; border-radius: 999px; background: var(--walk); }
 .fav { margin: 4px 0 6px; font-size: 15px; }
 .facts { margin: 4px 0 0; padding-left: 18px; line-height: 1.7; }
+.style-english { background: linear-gradient(135deg, #a6c8e0 0 35%, #fbf8f1 35% 65%, #cfe8b7 65%); }
