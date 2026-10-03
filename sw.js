@@ -1,6 +1,6 @@
 /* Keeps the app working offline. Map tiles are left to the browser's own cache. */
-const APP_CACHE = 'niniko-app-v13';
-const APP_FILES = ['./', 'index.html', 'app.css', 'app.js', 'poi.js', 'vendor/leaflet.css', 'vendor/leaflet.js',
+const APP_CACHE = 'niniko-app-v14';
+const APP_FILES = ['./', 'index.html', 'app.css', 'app.js', 'poi.js', 'vendor/leaflet.css', 'vendor/leaflet.js', 'vendor/maplibre-gl.css', 'vendor/maplibre-gl.js',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {

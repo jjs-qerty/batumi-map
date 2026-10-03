@@ -165,37 +165,109 @@
   // Keep popups clear of the title, filter chips and bottom toolbar when they open.
   L.Popup.mergeOptions({ autoPanPaddingTopLeft: L.point(12, 170), autoPanPaddingBottomRight: L.point(12, 110) });
   const map = L.map('map', { zoomControl: false, attributionControl: true }).setView(CITIES[city].center, 15);
-  // Free map styles that need no key. "English" (the default) labels streets and places in English;
-  // the OpenStreetMap styles use the local language (Georgian, Greek).
-  const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+  // ---------- map styles ----------
+  // Jarji's five picks from the map catalogue (maps.html). All free and need no key.
+  // The first four are vector maps drawn by MapLibre underneath Leaflet, with names switched to English.
+  const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+  const OFM_ATTR = '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> ' + OSM_ATTR;
+  const VT_ATTR = '<a href="https://versatiles.org" target="_blank" rel="noopener">VersaTiles</a> ' + OSM_ATTR;
+  const esriTiles = (path) => 'https://server.arcgisonline.com/ArcGIS/rest/services/' + path + '/MapServer/tile/{z}/{y}/{x}';
   const BASEMAPS = {
-    english: { name: 'English', note: 'Bright street map with names in English.',
-      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', maxZoom: 19, cls: 'tiles-bright',
-      attribution: 'Tiles &copy; Esri, sources: Esri, HERE, Garmin, ' + OSM_ATTR + ' contributors' },
-    bright: { name: 'Bright', note: 'Full-colour OpenStreetMap. Names in the local language.',
-      url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', maxZoom: 19, cls: 'tiles-bright', attribution: OSM_ATTR },
-    colourful: { name: 'Colourful', note: 'OpenStreetMap France style with more shop and café icons. Names in the local language.',
-      url: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png', subdomains: 'abc', maxZoom: 20, cls: 'tiles-bright',
-      attribution: OSM_ATTR + ', tiles by <a href="https://www.openstreetmap.fr" target="_blank" rel="noopener">OSM France</a>' },
-    soft: { name: 'Soft', note: 'The earlier calm look with faded colours. Names in the local language.',
-      url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', maxZoom: 19, cls: 'tiles-soft', attribution: OSM_ATTR },
+    liberty: { name: 'Liberty', note: 'Bright and colourful, with green parks and blue sea.', style: 'https://tiles.openfreemap.org/styles/liberty', attribution: OFM_ATTR },
+    bright: { name: 'Bright', note: 'Classic, cheerful street map with lots of colour.', style: 'https://tiles.openfreemap.org/styles/bright', attribution: OFM_ATTR },
+    colorful: { name: 'Colorful', note: 'Soft pastel colours with a modern look.', style: 'https://tiles.versatiles.org/assets/styles/colorful/style.json', attribution: VT_ATTR },
+    neutrino: { name: 'Neutrino', note: 'Minimal and gentle, in warm grey tones.', style: 'https://tiles.versatiles.org/assets/styles/neutrino/style.json', attribution: VT_ATTR },
+    lightgray: { name: 'Light grey', note: 'Plain light grey with English names.', tiles: esriTiles('Canvas/World_Light_Gray_Base'),
+      labels: esriTiles('Canvas/World_Light_Gray_Reference'), maxNative: 16, attribution: 'Tiles &copy; Esri, sources: Esri, HERE, Garmin, ' + OSM_ATTR },
   };
-  const BASEMAP_KEY = 'niniko.basemap.v2'; // v2: English became the default for everyone
-  let baseKey = 'english', baseLayer = null;
-  try { if (BASEMAPS[localStorage.getItem(BASEMAP_KEY)]) baseKey = localStorage.getItem(BASEMAP_KEY); } catch (e) { /* ignore */ }
-  function setBasemap(key, save = true) {
-    const b = BASEMAPS[key] || BASEMAPS.bright;
-    if (baseLayer) map.removeLayer(baseLayer);
-    baseKey = key;
-    baseLayer = L.tileLayer(b.url, { maxZoom: b.maxZoom, subdomains: b.subdomains || 'abc', className: b.cls, attribution: b.attribution }).addTo(map);
-    // If a style's tile server isn't answering, go back to the plain OpenStreetMap map by itself.
-    if (key !== 'bright' && key !== 'soft') {
-      let ok = 0, bad = 0;
-      const layer = baseLayer;
-      layer.on('tileload', () => { ok++; });
-      layer.on('tileerror', () => {
-        if (++bad >= 4 && ok === 0 && baseLayer === layer) { setBasemap('bright', false); toast(`The ${b.name} map isn't loading right now, so this is the Bright map for now.`, 4500); }
+  const BASEMAP_ORDER = Object.keys(BASEMAPS);
+
+  // A MapLibre map living inside Leaflet's tile pane, kept in step with Leaflet's view.
+  // (MapLibre zoom is one less than Leaflet's at the same scale, because its tiles are 512 px.)
+  const EN_NAME = ['coalesce', ['get', 'name:en'], ['get', 'name_en'], ['get', 'name:latin'], ['get', 'name_int'], ['get', 'name']];
+  const GLLayer = L.Layer.extend({
+    initialize(opts) { this.opts = opts; },
+    getAttribution() { return this.opts.attribution; },
+    onAdd(m) {
+      const el = this._el = L.DomUtil.create('div', 'gl-layer leaflet-zoom-animated');
+      m.getPanes().tilePane.appendChild(el);
+      this._resize();
+      const c = m.getCenter();
+      this.gl = new maplibregl.Map({ container: el, style: this.opts.style, interactive: false, attributionControl: false,
+        center: [c.lng, c.lat], zoom: m.getZoom() - 1, fadeDuration: 0 });
+      this.gl.on('style.load', () => {
+        // Show English names (or the Latin spelling), never Georgian or Greek script.
+        for (const layer of this.gl.getStyle().layers || []) {
+          if (layer.type !== 'symbol') continue;
+          const tf = this.gl.getLayoutProperty(layer.id, 'text-field');
+          if (tf && /name/.test(JSON.stringify(tf))) this.gl.setLayoutProperty(layer.id, 'text-field', EN_NAME);
+        }
+        if (this.opts.onLoad) this.opts.onLoad();
       });
+      this.gl.on('error', (e) => { if (this.opts.onError) this.opts.onError(e); });
+      m.on('move zoom viewreset', this._sync, this);
+      m.on('resize', this._resize, this);
+      m.on('zoomanim', this._zoomAnim, this);
+      this._sync();
+    },
+    onRemove(m) {
+      m.off('move zoom viewreset', this._sync, this); m.off('resize', this._resize, this); m.off('zoomanim', this._zoomAnim, this);
+      if (this.gl) this.gl.remove();
+      L.DomUtil.remove(this._el);
+    },
+    _resize() {
+      const size = this._map.getSize();
+      this._el.style.width = size.x + 'px'; this._el.style.height = size.y + 'px';
+      if (this.gl) { this.gl.resize(); this._sync(); }
+    },
+    _sync() {
+      const m = this._map; if (!m || !this.gl) return;
+      L.DomUtil.setPosition(this._el, m.containerPointToLayerPoint([0, 0]));
+      const c = m.getCenter();
+      this.gl.jumpTo({ center: [c.lng, c.lat], zoom: m.getZoom() - 1 });
+    },
+    // Follow Leaflet's zoom animation by scaling the canvas, then redraw sharp when it ends.
+    _zoomAnim(e) {
+      const m = this._map, scale = m.getZoomScale(e.zoom);
+      const offset = m._latLngBoundsToNewLayerBounds(m.getBounds(), e.zoom, e.center).min;
+      L.DomUtil.setTransform(this._el, offset, scale);
+    },
+  });
+
+  const BASEMAP_KEY = 'niniko.basemap.v3'; // v3: Jarji's five catalogue picks, Liberty first
+  let baseKey = 'liberty', baseLayer = null, baseTimer = null;
+  try { if (BASEMAPS[localStorage.getItem(BASEMAP_KEY)]) baseKey = localStorage.getItem(BASEMAP_KEY); } catch (e) { /* ignore */ }
+  // If a map doesn't load, try the next of the five for this visit (without changing the saved choice).
+  function failBasemap(key, tried) {
+    if (baseKey !== key) return;
+    const next = BASEMAP_ORDER.find((k) => !tried.includes(k));
+    if (!next) return;
+    toast(`The ${BASEMAPS[key].name} map isn't loading right now, so this is ${BASEMAPS[next].name} for now.`, 4500);
+    setBasemap(next, false, tried);
+  }
+  function setBasemap(key, save = true, tried = []) {
+    const b = BASEMAPS[key] || BASEMAPS.liberty;
+    key = BASEMAPS[key] ? key : 'liberty';
+    clearTimeout(baseTimer);
+    if (baseLayer) map.removeLayer(baseLayer);
+    baseKey = key; tried = tried.concat(key);
+    let loaded = false;
+    if (b.style && window.maplibregl && maplibregl.supported !== false) {
+      baseLayer = new GLLayer({ style: b.style, attribution: b.attribution,
+        onLoad: () => { loaded = true; },
+        onError: (e) => { if (!loaded && /style|fetch|Failed|404|50\d/i.test(String((e && e.error && (e.error.message || e.error.status)) || ''))) failBasemap(key, tried); } });
+      baseLayer.addTo(map);
+      baseTimer = setTimeout(() => { if (!loaded) failBasemap(key, tried); }, 15000);
+    } else if (b.style) {
+      failBasemap(key, tried); return; // this phone can't draw vector maps
+    } else {
+      const base = L.tileLayer(b.tiles, { maxZoom: 19, maxNativeZoom: b.maxNative || 19, attribution: b.attribution });
+      if (!map.getPane('baseLabels')) map.createPane('baseLabels').style.zIndex = 250; // above the map, below trails
+      const labels = b.labels ? L.tileLayer(b.labels, { maxZoom: 19, maxNativeZoom: b.maxNative || 19, pane: 'baseLabels' }) : null;
+      baseLayer = L.layerGroup([base].concat(labels || [])).addTo(map);
+      let ok = 0, bad = 0;
+      base.on('tileload', () => { ok++; });
+      base.on('tileerror', () => { if (++bad >= 4 && ok === 0) failBasemap(key, tried); });
     }
     if (save) try { localStorage.setItem(BASEMAP_KEY, baseKey); } catch (e) { /* ignore */ }
   }

@@ -48,9 +48,9 @@ button { font: inherit; color: inherit; }
 
 #map { position: fixed; inset: 0; background: var(--surface-2); }
 .leaflet-container { font-family: var(--font); }
-/* Map styles. Bright stays bright even when the phone is in dark mode. */
-.tiles-bright { filter: saturate(1.08) brightness(1.03); }
-.tiles-soft { filter: saturate(0.45) brightness(1.05) contrast(0.92); }
+/* Vector map drawn by MapLibre under Leaflet's markers and trails. */
+.gl-layer { position: absolute; top: 0; left: 0; pointer-events: none; transform-origin: 0 0; }
+.gl-layer canvas { outline: none; }
 .picking #map { cursor: crosshair; }
 
 /* Top chips */
@@ -283,9 +283,6 @@ button { font: inherit; color: inherit; }
   background: #222; color: #fff; font-size: 16px; line-height: 24px; padding: 0; cursor: pointer; }
 /* Map style picker swatches */
 .style-sw { background-size: cover; }
-.style-bright { background: linear-gradient(135deg, #aad3df 0 35%, #f2efe9 35% 65%, #c8facc 65%); }
-.style-colourful { background: linear-gradient(135deg, #b5d0d0 0 35%, #f7e8c4 35% 65%, #b9e3a8 65%); }
-.style-soft { background: linear-gradient(135deg, #d6e2e6 0 35%, #f4f2ee 35% 65%, #dde8dc 65%); }
 .list li.list-action { cursor: default; border-bottom: 0; padding-bottom: 4px; }
 
 /* Visited places */
@@ -317,4 +314,9 @@ button { font: inherit; color: inherit; }
 .bar i { display: block; height: 100%; border-radius: 999px; background: var(--walk); }
 .fav { margin: 4px 0 6px; font-size: 15px; }
 .facts { margin: 4px 0 0; padding-left: 18px; line-height: 1.7; }
-.style-english { background: linear-gradient(135deg, #a6c8e0 0 35%, #fbf8f1 35% 65%, #cfe8b7 65%); }
+/* Map style picker swatches (rough colours of each map) */
+.style-liberty { background: linear-gradient(135deg, #a0c8f0 0 35%, #f8f4f0 35% 65%, #c4e6a8 65%); }
+.style-bright { background: linear-gradient(135deg, #a5d2f0 0 35%, #f8f4ec 35% 65%, #d7e8b0 65%); }
+.style-colorful { background: linear-gradient(135deg, #bed7ee 0 35%, #fbf6ee 35% 65%, #d9ecc6 65%); }
+.style-neutrino { background: linear-gradient(135deg, #d4dde3 0 35%, #f6f1ea 35% 65%, #e3e4d6 65%); }
+.style-lightgray { background: linear-gradient(135deg, #d8d8d8 0 35%, #f2f2f2 35% 65%, #e4e4e4 65%); }
