@@ -10,12 +10,14 @@ npx cap sync ios
 
 # What iOS shows when the app asks for GPS, the camera and Photos.
 PLIST=ios/App/App/Info.plist
-pb() { /usr/libexec/PlistBuddy -c "Delete :$1" "$PLIST" 2>/dev/null || true; /usr/libexec/PlistBuddy -c "Add :$1 string $2" "$PLIST"; }
-pb NSLocationWhenInUseUsageDescription "Niniko's Map uses your location to draw the streets you walk and to place your memories."
-pb NSCameraUsageDescription "Niniko's Map uses the camera for photos of your memories."
-pb NSPhotoLibraryUsageDescription "Niniko's Map lets you add photos from your library to a memory."
-pb NSPhotoLibraryAddUsageDescription "Niniko's Map saves your memory photos to Photos when you ask."
-/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Niniko's Map" "$PLIST" 2>/dev/null || true
+# (plutil takes the text as it is; PlistBuddy trips over the apostrophe in "Niniko's".)
+pl() { plutil -replace "$1" -string "$2" "$PLIST"; }
+pl NSLocationWhenInUseUsageDescription "Niniko's Map uses your location to draw the streets you walk and to place your memories."
+pl NSCameraUsageDescription "Niniko's Map uses the camera for photos of your memories."
+pl NSPhotoLibraryUsageDescription "Niniko's Map lets you add photos from your library to a memory."
+pl NSPhotoLibraryAddUsageDescription "Niniko's Map saves your memory photos to Photos when you ask."
+pl CFBundleDisplayName "Niniko's Map"
+for k in NSLocationWhenInUseUsageDescription NSCameraUsageDescription; do plutil -extract "$k" raw "$PLIST" >/dev/null; done # stop if they are missing
 
 # App icon (one 1024 px image)
 ICONS=ios/App/App/Assets.xcassets/AppIcon.appiconset
