@@ -1,6 +1,6 @@
 # Niniko's Map
 
-A phone web app with a map of Batumi and Tbilisi that remembers the streets you walked and the places where memories were made.
+A phone web app with a map of Batumi, Tbilisi and Ayia Napa that remembers the streets you walked and the places where memories were made.
 
 ## What it does
 - **Start walk / Finish walk** records your route with GPS and draws it in pink. Every walk stays on the map, so the streets you have walked fill in over time.
@@ -14,7 +14,7 @@ A phone web app with a map of Batumi and Tbilisi that remembers the streets you 
 - **Visited**: mark places visited in their popup (taking a photo at a place does it too). A chip filters visited / not visited, and *My map → Visited* lists them.
 - **Download photos**: *Download* on a memory, or *Download all photos* in *My map → Memories* (several photos come as one .zip).
 - **Automatic trail**: while the app is open it records where you go (turn this off in *My map*). A break of more than 30 minutes starts a new walk.
-- **Places**: chips at the top show sights, museums, galleries, event venues, parks, cafés, restaurants, bars, pharmacies and hospitals from OpenStreetMap. Each place shows whether it is open now (Batumi time, from its listed opening hours) and whether you need a ticket. The main paid sights have notes on price and where to buy; prices are the last known ones and should be checked. *Open now* hides closed places. *Popular only* (on by default) hides lesser-known places; tap it to see *All places*.
+- **Places**: chips at the top show sights, museums, galleries, event venues, parks, cafés, restaurants, bars, pharmacies and hospitals from OpenStreetMap. Each place shows whether it is open now (in the city's local time, from its listed opening hours) and whether you need a ticket. The main paid sights have notes on price and where to buy; prices are the last known ones and should be checked. *Open now* hides closed places. *Popular only* (on by default) hides lesser-known places; tap it to see *All places*.
 - **Map style** (layers button): Bright (full-colour OpenStreetMap, default), Colourful (OSM France) or Soft. If a style's server is down the app goes back to Bright.
 - **Events**: there is no free live feed of Batumi events, so the map shows event venues (theatres, cinemas, arts centres, clubs, stadiums) with links to tkt.ge and biletebi.ge for what's on.
 - Everything is stored on the phone only. Use *Save a backup* now and then.

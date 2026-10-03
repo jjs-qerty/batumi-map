@@ -4,12 +4,25 @@
 
   // Cities the map knows. center is [lat, lng]; box is [south, west, north, east].
   const CITIES = {
-    batumi: { name: 'Batumi', local: 'ბათუმი', center: [41.6430, 41.6360], box: [41.565, 41.555, 41.700, 41.720] },
-    tbilisi: { name: 'Tbilisi', local: 'თბილისი', center: [41.6925, 44.8030], box: [41.640, 44.700, 41.800, 44.920] },
+    batumi: { name: 'Batumi', local: 'ბათუმი', center: [41.6430, 41.6360], box: [41.565, 41.555, 41.700, 41.720], tz: 'Asia/Tbilisi' },
+    tbilisi: { name: 'Tbilisi', local: 'თბილისი', center: [41.6925, 44.8030], box: [41.640, 44.700, 41.800, 44.920], tz: 'Asia/Tbilisi' },
+    // Ayia Napa town with Cape Greco and Protaras. Cyprus time (UTC+2, +3 in summer).
+    ayianapa: { name: 'Ayia Napa', local: 'Αγία Νάπα', center: [34.9886, 33.9997], box: [34.955, 33.920, 35.035, 34.095], tz: 'Asia/Nicosia' },
   };
   const CITY_KEY = 'niniko.city';
   let city = (() => { try { return CITIES[localStorage.getItem(CITY_KEY)] ? localStorage.getItem(CITY_KEY) : 'batumi'; } catch (e) { return 'batumi'; } })();
   const inCity = (c, lat, lng) => { const b = CITIES[c].box; return lat >= b[0] && lat <= b[2] && lng >= b[1] && lng <= b[3]; };
+  // Times on the map are shown in the local time of the city where they happened, whatever the phone is set to.
+  const tzAt = (lat, lng) => { const c = Object.keys(CITIES).find((k) => inCity(k, lat, lng)); return c ? CITIES[c].tz : undefined; };
+  function inTz(opts, tz) { try { return new Intl.DateTimeFormat(undefined, { ...opts, timeZone: tz }); } catch (e) { return new Intl.DateTimeFormat(undefined, opts); } }
+  function dayKey(ms, tz) {
+    try { return new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: tz }).format(ms); }
+    catch (e) { return new Date(ms - new Date(ms).getTimezoneOffset() * 60000).toISOString().slice(0, 10); }
+  }
+  function hourIn(ms, tz) {
+    try { return Number(new Intl.DateTimeFormat('en-GB', { hour: '2-digit', hourCycle: 'h23', timeZone: tz }).format(ms)) % 24; }
+    catch (e) { return new Date(ms).getHours(); }
+  }
   const MIN_STEP_M = 8;              // ignore GPS jitter smaller than this
   const MAX_SPEED_MS = 15;           // a jump faster than this (54 km/h) is a GPS glitch, unless it keeps happening
   const AUTO_KEY = 'niniko.autoRecord';
@@ -23,7 +36,7 @@
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-  const todayISO = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const todayISO = (tz) => dayKey(Date.now(), tz);
 
   function haversine(a, b) {
     const R = 6371000, toR = Math.PI / 180;
@@ -93,7 +106,7 @@
   }
   // Memories hold a list of photos; older ones saved a single "photo".
   const photosOf = (m) => (m.photos && m.photos.length ? m.photos : (m.photo ? [m.photo] : []));
-  function fmtTime(ms) { return new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }); }
+  function fmtTime(ms, tz) { return inTz({ hour: '2-digit', minute: '2-digit' }, tz).format(ms); }
 
   let toastTimer;
   function toast(msg, ms = 2600) {
@@ -270,19 +283,19 @@
   }
   map.on('popupclose', () => { if (trailDot) { map.removeLayer(trailDot); trailDot = null; } });
 
-  function fmtClock(ms) {
-    const d = new Date(ms), sameDay = d.toDateString() === new Date().toDateString();
-    return fmtTime(ms) + (sameDay ? ' today' : ', ' + d.toLocaleDateString(undefined, { day: 'numeric', month: 'long' }));
+  function fmtClock(ms, tz) {
+    const sameDay = dayKey(ms, tz) === dayKey(Date.now(), tz);
+    return fmtTime(ms, tz) + (sameDay ? ' today' : ', ' + inTz({ day: 'numeric', month: 'long' }, tz).format(ms));
   }
 
   // ---------- walk popups ----------
   function openWalkPopup(w, latlng) {
     const dur = w.endedAt && w.startedAt ? ` · ${fmtDur(w.endedAt - w.startedAt)}` : '';
-    const near = nearestPoint(w.points, latlng);
+    const near = nearestPoint(w.points, latlng), tz = w.points.length ? tzAt(w.points[0][0], w.points[0][1]) : undefined;
     const atPoint = near && near[2]
-      ? `<div class="here-at">You were here at <b>${fmtClock(near[2])}</b></div>`
+      ? `<div class="here-at">You were here at <b>${fmtClock(near[2], tz)}</b></div>`
       : (w.drawn ? '<div class="when">Drawn by hand, so there are no times on this walk.</div>' : '');
-    const span = !w.drawn && w.endedAt ? `${fmtTime(w.startedAt)}–${fmtTime(w.endedAt)}` : '';
+    const span = !w.drawn && w.endedAt ? `${fmtTime(w.startedAt, tz)}–${fmtTime(w.endedAt, tz)}` : '';
     const html = `<div class="pop">${atPoint}<h3>${esc(w.name)}</h3>
       <div class="when">${fmtDate(w.startedAt)}${span ? ' · ' + span : ''}</div>
       <p>${fmtDist(w.distance)}${dur}</p>
@@ -383,7 +396,7 @@
     // First fix of the session in the other city: switch the map there.
     if (!autoSwitched && !inCity(city, lat, lng)) {
       const other = Object.keys(CITIES).find((c) => inCity(c, lat, lng));
-      if (other) { autoSwitched = true; setCity(other, false); toast(`You're in ${CITIES[other].name}, so the map switched there.`); }
+      if (other) { autoSwitched = true; setCity(other, true); toast(`You're in ${CITIES[other].name}, so the map switched there.`); }
     }
     if (!meMarker) {
       meMarker = L.marker([lat, lng], { icon: L.divIcon({ className: '', html: '<div class="me-dot"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }), interactive: false, zIndexOffset: 1000 }).addTo(map);
@@ -412,7 +425,9 @@
       const pos = await locateOnce();
       const { latitude, longitude, accuracy } = pos.coords;
       showMe(latitude, longitude, accuracy);
-      map.flyTo([latitude, longitude], Math.max(map.getZoom(), 16));
+      // Jump when it's far (another city), glide when it's close.
+      if (map.distance(map.getCenter(), [latitude, longitude]) > 50000) map.setView([latitude, longitude], 16);
+      else map.flyTo([latitude, longitude], Math.max(map.getZoom(), 16));
     } catch (e) { toast(geoError(e), 4000); }
   };
 
@@ -449,7 +464,7 @@
     const rec = state.recording; if (!rec) return;
     const near = nearestPoint(rec.points, latlng); if (!near) return;
     L.popup({ maxWidth: 260 }).setLatLng([near[0], near[1]])
-      .setContent(`<div class="pop"><div class="here-at">You were here at <b>${fmtClock(near[2])}</b></div><div class="when">Current trail · ${fmtDist(trailLength(rec.points))} so far</div></div>`)
+      .setContent(`<div class="pop"><div class="here-at">You were here at <b>${fmtClock(near[2], tzAt(near[0], near[1]))}</b></div><div class="when">Current trail · ${fmtDist(trailLength(rec.points))} so far</div></div>`)
       .openOn(map);
     markTrailPoint(near);
   }
@@ -623,7 +638,7 @@
   }
 
   function openMemoryForm(existing, latlng, title) {
-    const m = existing ? { ...existing } : { id: uid(), lat: latlng.lat, lng: latlng.lng, title: title || '', note: '', date: todayISO(), createdAt: Date.now() };
+    const m = existing ? { ...existing } : { id: uid(), lat: latlng.lat, lng: latlng.lng, title: title || '', note: '', date: todayISO(tzAt(latlng.lat, latlng.lng)), createdAt: Date.now() };
     m.photos = photosOf(m).slice();
     const node = h(`
       <div class="field"><label for="memTitle">What happened here</label><input type="text" id="memTitle" maxlength="100" placeholder="First swim at the boulevard"></div>
@@ -669,7 +684,6 @@
   }
 
   // ---------- trip journal: days, replay, stats ----------
-  const dayKey = (ms) => new Date(ms - new Date(ms).getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   const fmtDayLong = (key) => new Date(key + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   const fmtDayShort = (key) => new Date(key + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
   function fmtSpan(ms) { const m = Math.round(ms / 60000), h = Math.floor(m / 60); return h ? `${h} h ${m % 60} min` : `${m} min`; }
@@ -680,11 +694,11 @@
     const days = new Map();
     const day = (k) => { if (!days.has(k)) days.set(k, { key: k, walks: [], memories: [], visited: [], dist: 0, ms: 0, photos: 0 }); return days.get(k); };
     for (const w of state.walks) {
-      const d = day(dayKey(w.startedAt)); d.walks.push(w); d.dist += w.distance || 0;
+      const d = day(dayKey(w.startedAt, w.points.length ? tzAt(w.points[0][0], w.points[0][1]) : undefined)); d.walks.push(w); d.dist += w.distance || 0;
       if (!w.drawn && w.endedAt) d.ms += w.endedAt - w.startedAt;
     }
-    for (const m of state.memories) { const d = day(m.date || dayKey(m.createdAt || Date.now())); d.memories.push(m); d.photos += photosOf(m).length; }
-    for (const v of places.visitedList()) if (v.at) day(dayKey(v.at)).visited.push(v);
+    for (const m of state.memories) { const d = day(m.date || dayKey(m.createdAt || Date.now(), tzAt(m.lat, m.lng))); d.memories.push(m); d.photos += photosOf(m).length; }
+    for (const v of places.visitedList()) if (v.at) day(dayKey(v.at, tzAt(v.lat, v.lng))).visited.push(v);
     return [...days.values()].sort((a, b) => b.key.localeCompare(a.key));
   }
   function daySummary(d) {
@@ -760,7 +774,7 @@
       if (cur) {
         dot.setLatLng(cur.here);
         const w = cur.sg.w;
-        const clock = !w.drawn && w.endedAt ? ' · ' + fmtTime(w.startedAt + (w.endedAt - w.startedAt) * (cur.upto / cur.sg.len)) : '';
+        const clock = !w.drawn && w.endedAt ? ' · ' + fmtTime(w.startedAt + (w.endedAt - w.startedAt) * (cur.upto / cur.sg.len), tzAt(w.points[0][0], w.points[0][1])) : '';
         $('hintText').textContent = fmtDayShort(d.key) + clock;
         for (const m of d.memories) if (!popped.has(m.id) && haversine(cur.here, [m.lat, m.lng]) < 40) { popped.add(m.id); popMemory(m); }
       }
@@ -789,7 +803,7 @@
       if (w.drawn) continue;
       for (let i = 1; i < w.points.length; i++) {
         const t = w.points[i][2]; if (!t) continue;
-        let hr = new Date(t).getHours(); if (hr < 5) hr += 24;
+        let hr = hourIn(t, tzAt(w.points[i][0], w.points[i][1])); if (hr < 5) hr += 24;
         const k = parts.findIndex(([, a, b]) => hr >= a && hr < b);
         if (k >= 0) byPart[k] += haversine(w.points[i - 1], w.points[i]);
       }
@@ -1181,7 +1195,7 @@
     if (best && bestD <= PHOTO_JOIN_M) return addPhotosTo(best, photos);
     const place = places && places.near ? places.near(lat, lng, 60)[0] : null;
     if (place && places.markVisited(place)) setTimeout(() => toast(`Marked ${place.name} as visited`, 2500), 3600);
-    const m = { id: uid(), lat, lng, title: place ? place.name : 'Photo at ' + fmtTime(Date.now()), note: '', date: todayISO(), photos: [], createdAt: Date.now() };
+    const m = { id: uid(), lat, lng, title: place ? place.name : 'Photo at ' + fmtTime(Date.now(), tzAt(lat, lng)), note: '', date: todayISO(tzAt(lat, lng)), photos: [], createdAt: Date.now() };
     await addPhotosTo(m, photos, true);
   }
 

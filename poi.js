@@ -6,7 +6,11 @@
   const BBOX = {
     batumi: '41.565,41.555,41.700,41.720',  // Gonio to the Botanical Garden
     tbilisi: '41.640,44.700,41.800,44.920', // Old Tbilisi, Vake, Saburtalo, Didube, Isani
+    ayianapa: '34.955,33.920,35.035,34.095', // Ayia Napa, Cape Greco, Protaras
   };
+  // Opening hours are read in each city's local time.
+  const TZ = { batumi: 'Asia/Tbilisi', tbilisi: 'Asia/Tbilisi', ayianapa: 'Asia/Nicosia' };
+  let tz = TZ.batumi;
   const OVERPASS = [
     'https://overpass-api.de/api/interpreter',
     'https://overpass.kumi.systems/api/interpreter',
@@ -121,7 +125,10 @@
     { match: /gabriadze|გაბრიაძ/i, name: 'Gabriadze Puppet Theatre', lat: 41.6963, lng: 44.8063, cat: 'events', fee: true,
       price: 'about 30–50 GEL', how: 'Small hall that sells out, so book several days ahead at the box office in Old Tbilisi or online on ' + TICKET_SITES + '. The clock tower show outside is free.' },
   ];
+  // No ticket notes for Ayia Napa yet: we only list prices we have checked.
+  TICKETS_BY_CITY.ayianapa = [];
   let TICKETS = TICKETS_BY_CITY.batumi;
+  let currency = 'GEL';
 
     const CURATED_CATS = new Set(['sights', 'museums', 'galleries', 'events', 'parks']);
   function findCurated(p) {
@@ -141,8 +148,8 @@
       return { needs: true, price: t.charge ? t.charge.replace(/;/g, ', ') : null,
         how: p.cat === 'events' ? 'Buy at the box office or online on ' + TICKET_SITES + '.' : 'Buy at the entrance.' };
     }
-    if (p.cat === 'museums' || p.cat === 'galleries') return { maybe: true, text: 'Most museums here charge a small entry fee (often 3–10 GEL), paid at the desk.' };
-    if (p.cat === 'events') return { maybe: true, text: 'Tickets for shows and concerts are sold at the box office and online on ' + TICKET_SITES + '.' };
+    if (p.cat === 'museums' || p.cat === 'galleries') return { maybe: true, text: currency ? `Most museums here charge a small entry fee (often 3–10 ${currency}), paid at the desk.` : 'Many museums charge a small entry fee, paid at the desk.' };
+    if (p.cat === 'events') return { maybe: true, text: currency ? 'Tickets for shows and concerts are sold at the box office and online on ' + TICKET_SITES + '.' : 'Tickets for shows and concerts are usually sold at the venue.' };
     return null;
   }
 
@@ -193,10 +200,17 @@
     return week;
   }
 
-  // Georgia (Batumi and Tbilisi) is UTC+4 all year.
-  function batumiNow() {
-    const t = new Date(Date.now() + 4 * 3600e3);
-    return { day: (t.getUTCDay() + 6) % 7, min: t.getUTCHours() * 60 + t.getUTCMinutes() };
+  // Day of the week (0 = Monday) and minute of the day in the current city's time.
+  const WD = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 };
+  function cityNow() {
+    try {
+      const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+        .formatToParts(new Date()).map((x) => [x.type, x.value]));
+      return { day: WD[parts.weekday], min: (Number(parts.hour) % 24) * 60 + Number(parts.minute) };
+    } catch (e) {
+      const t = new Date(Date.now() + (tz === 'Asia/Nicosia' ? 2 : 4) * 3600e3); // phones without time zone data
+      return { day: (t.getUTCDay() + 6) % 7, min: t.getUTCHours() * 60 + t.getUTCMinutes() };
+    }
   }
   function isOpenAt(week, day, min) {
     if (week[day].some(([s, e]) => min >= s && min < e)) return true;
@@ -209,7 +223,7 @@
     const week = parseHours(raw);
     if (!week) return null;
     if (week.every((r) => r.length === 1 && r[0][0] === 0 && r[0][1] >= 1440)) return { open: true, text: 'Open 24 hours' };
-    const now = batumiNow(), open = isOpenAt(week, now.day, now.min);
+    const now = cityNow(), open = isOpenAt(week, now.day, now.min);
     // Walk forward minute by minute (max a week) to find the next change.
     for (let i = 1; i <= 7 * 1440; i++) {
       const t = now.min + i, day = (now.day + Math.floor(t / 1440)) % 7, min = t % 1440;
@@ -220,7 +234,7 @@
     }
     return open ? { open: true, text: 'Open now' } : { open: false, text: 'Closed' };
   }
-  function isOpenNow(raw) { const w = parseHours(raw); if (!w) return null; const n = batumiNow(); return isOpenAt(w, n.day, n.min); }
+  function isOpenNow(raw) { const w = parseHours(raw); if (!w) return null; const n = cityNow(); return isOpenAt(w, n.day, n.min); }
 
   // ---------- data ----------
   function overpassQuery(city) {
@@ -452,7 +466,7 @@
     let city = null;
     function setCity(c) {
       if (!BBOX[c] || c === city) return;
-      city = c; TICKETS = TICKETS_BY_CITY[c] || [];
+      city = c; TICKETS = TICKETS_BY_CITY[c] || []; tz = TZ[c] || tz; currency = c === 'ayianapa' ? '' : 'GEL';
       const cached = readCache(c);
       setPlaces(cached && cached.items ? cached.items : []);
       if (!cached || Date.now() - cached.at > CACHE_DAYS * 864e5) {

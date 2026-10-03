@@ -67,7 +67,7 @@ button { font: inherit; color: inherit; }
 .brand { pointer-events: auto; border: 0; font: inherit; text-align: left; color: inherit; cursor: pointer; align-items: flex-start; }
 .brand-city { font-weight: 600; color: var(--muted); font-size: 12.5px; margin-left: 4px; display: inline-flex; align-items: center; gap: 1px; }
 .brand-city svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
-.city-list { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.city-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 10px; }
 .city-btn { border: 2px solid var(--line); background: var(--surface-2); border-radius: var(--radius); padding: 16px 12px; display: flex; flex-direction: column; gap: 2px; cursor: pointer; text-align: left; color: var(--ink); font: inherit; }
 .city-btn b { font-size: 17px; }
 .city-btn span { color: var(--muted); }
