@@ -41,6 +41,11 @@
   const MAX_ACCURACY_M = 40;         // ignore fixes worse than this
   const REC_KEY = 'niniko.recording';
 
+  // Running inside the phone app (Capacitor) rather than a browser. The app's own pages count as secure.
+  const NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  const plugin = (name) => (NATIVE && window.Capacitor.Plugins ? window.Capacitor.Plugins[name] : null);
+  const secure = () => window.isSecureContext || NATIVE;
+
   // ---------- tiny helpers ----------
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -556,7 +561,7 @@
   }
 
   function geoError(err) {
-    if (!window.isSecureContext) return 'Location needs the app to be opened over https://. See the hosting notes.';
+    if (!secure()) return 'Location needs the app to be opened over https://. See the hosting notes.';
     if (err && err.code === 1) return 'Location is blocked. Allow location for this app in your phone settings.';
     if (err && err.code === 3) return 'Still looking for GPS. Step outside or wait a moment.';
     return 'Could not get your location right now.';
@@ -587,6 +592,8 @@
   function clearRecDraft() { try { localStorage.removeItem(REC_KEY); } catch (e) { /* ignore */ } }
 
   async function requestWakeLock() {
+    const keep = plugin('KeepAwake');
+    if (keep) { try { await keep.keepAwake(); state.wakeLock = { release: () => keep.allowSleep() }; } catch (e) { state.wakeLock = null; } return; }
     try { if ('wakeLock' in navigator) state.wakeLock = await navigator.wakeLock.request('screen'); } catch (e) { state.wakeLock = null; }
   }
   const autoOn = () => { try { return localStorage.getItem(AUTO_KEY) !== 'off'; } catch (e) { return true; } };
@@ -620,7 +627,7 @@
 
   function startRecording(resume, auto) {
     if (!('geolocation' in navigator)) { toast('This browser cannot read GPS.'); return; }
-    if (!window.isSecureContext) { toast(geoError(), 4500); return; }
+    if (!secure()) { toast(geoError(), 4500); return; }
     state.recording = resume || { id: uid(), startedAt: Date.now(), points: [] };
     const startPts = smoothed(state.recording.points);
     state.recLine = L.layerGroup([
@@ -1053,7 +1060,17 @@
   // On iPhones a download from an app on the home screen often goes nowhere, so the share sheet is used instead
   // (Save Image puts photos straight into Photos, Save to Files keeps a backup).
   const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  // In the phone app: save the files to the app's cache, then open the phone's share sheet with them.
+  function nativeShare(files) {
+    const fs = plugin('Filesystem'), share = plugin('Share');
+    const base64 = (f) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.slice(r.result.indexOf(',') + 1)); r.onerror = rej; r.readAsDataURL(f); });
+    const seen = new Set(), unique = (n) => { let k = n, i = 1; while (seen.has(k)) k = n.replace(/(\.\w+)?$/, ` (${++i})$1`); seen.add(k); return k; };
+    Promise.all(files.map((f) => base64(f).then((data) => fs.writeFile({ path: unique(f.name), data, directory: 'CACHE' }))))
+      .then((out) => share.share({ files: out.map((o) => o.uri) }))
+      .catch((e) => { if (!/cancel/i.test(String(e && (e.message || e)))) toast('Could not open the share menu.', 3500); });
+  }
   function shareFiles(files) {
+    if (plugin('Share') && plugin('Filesystem')) { nativeShare(files); return true; }
     if (!IS_IOS || !navigator.share || !navigator.canShare) return false;
     try { if (!navigator.canShare({ files })) return false; } catch (e) { return false; }
     navigator.share({ files }).catch(() => { /* closed the share sheet */ });
@@ -1070,7 +1087,9 @@
     const files = memories.flatMap(photoFiles);
     if (!files.length) { toast('No photos to download yet.'); return; }
     if (shareFiles(files.map((f) => new File([f.bytes], latinName(f.name) || 'photo.jpg', { type: 'image/jpeg' })))) {
-      toast(files.length === 1 ? 'Tap Save Image to keep it in Photos' : `Tap Save ${files.length} Images to keep them in Photos`, 4000); return;
+      if (NATIVE && !IS_IOS) toast('Choose where to save the photos', 3000);
+      else toast(files.length === 1 ? 'Tap Save Image to keep it in Photos' : `Tap Save ${files.length} Images to keep them in Photos`, 4000);
+      return;
     }
     if (files.length === 1) saveBlob(new Blob([files[0].bytes], { type: 'image/jpeg' }), files[0].name);
     else saveBlob(makeZip(files), zipName);
@@ -1379,10 +1398,10 @@
 
   load().then(() => {
     if (state.walks.length || state.memories.length) fitAll();
-    if (window.isSecureContext && 'geolocation' in navigator) startTrail(); else offerResume();
+    if (secure() && 'geolocation' in navigator) startTrail(); else offerResume();
   });
 
-  if ('serviceWorker' in navigator && window.isSecureContext) {
+  if ('serviceWorker' in navigator && window.isSecureContext && !NATIVE) { // the phone app already has its files
     window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
   }
 })();
