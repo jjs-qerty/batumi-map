@@ -16,13 +16,20 @@
   const tzAt = (lat, lng) => { const c = Object.keys(CITIES).find((k) => inCity(k, lat, lng)); return c ? CITIES[c].tz : undefined; };
   // Dates and times are always written in English, whatever language the phone uses.
   const LOCALE = 'en-GB';
-  function inTz(opts, tz) { try { return new Intl.DateTimeFormat(LOCALE, { ...opts, timeZone: tz }); } catch (e) { return new Intl.DateTimeFormat(LOCALE, opts); } }
+  // Date formatters are slow to create, so each one is made once and reused.
+  const fmtCache = new Map();
+  function formatter(locale, opts, tz) {
+    const key = locale + JSON.stringify(opts) + (tz || '');
+    if (!fmtCache.has(key)) fmtCache.set(key, new Intl.DateTimeFormat(locale, tz ? { ...opts, timeZone: tz } : opts));
+    return fmtCache.get(key);
+  }
+  function inTz(opts, tz) { try { return formatter(LOCALE, opts, tz); } catch (e) { return formatter(LOCALE, opts); } }
   function dayKey(ms, tz) {
-    try { return new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: tz }).format(ms); }
+    try { return formatter('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }, tz).format(ms); }
     catch (e) { return new Date(ms - new Date(ms).getTimezoneOffset() * 60000).toISOString().slice(0, 10); }
   }
   function hourIn(ms, tz) {
-    try { return Number(new Intl.DateTimeFormat('en-GB', { hour: '2-digit', hourCycle: 'h23', timeZone: tz }).format(ms)) % 24; }
+    try { return Number(formatter('en-GB', { hour: '2-digit', hourCycle: 'h23' }, tz).format(ms)) % 24; }
     catch (e) { return new Date(ms).getHours(); }
   }
   const MIN_STEP_M = 8;              // ignore GPS jitter smaller than this
@@ -96,7 +103,16 @@
     }
     return pts.filter((p, i) => keep[i]);
   }
-  const trailLength = (points) => pathLength(smoothTrail(points));
+  // Smoothing a long walk takes a moment, so the result is kept until the walk gets new points.
+  const smoothCache = new WeakMap();
+  function smoothed(points) {
+    const c = smoothCache.get(points);
+    if (c && c.n === points.length) return c.line;
+    const line = smoothTrail(points);
+    smoothCache.set(points, { n: points.length, line, len: pathLength(line) });
+    return line;
+  }
+  const trailLength = (points) => { smoothed(points); return smoothCache.get(points).len; };
   function fmtDist(m) { return m < 1000 ? Math.round(m) + ' m' : (m / 1000).toFixed(m < 10000 ? 2 : 1) + ' km'; }
   function fmtDur(ms) {
     const s = Math.max(0, Math.round(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
@@ -133,30 +149,40 @@
             if (!db.objectStoreNames.contains('walks')) db.createObjectStore('walks', { keyPath: 'id' });
             if (!db.objectStoreNames.contains('memories')) db.createObjectStore('memories', { keyPath: 'id' });
           };
-          req.onsuccess = () => resolve(req.result);
+          req.onsuccess = () => {
+            const db = req.result;
+            db.onclose = () => { dbp = null; }; // the browser dropped the connection; open it again next time
+            db.onversionchange = () => { db.close(); dbp = null; };
+            resolve(db);
+          };
           req.onerror = () => resolve(null);
         } catch (e) { resolve(null); }
       });
       return dbp;
     }
-    function tx(name, mode, fn) {
+    function tx(name, mode, fn, retry = true) {
       return open().then((db) => new Promise((resolve, reject) => {
         if (!db) { resolve(fn(null)); return; }
         const t = db.transaction(name, mode), os = t.objectStore(name);
         const r = fn(os);
         t.oncomplete = () => resolve(r && typeof r === 'object' && 'result' in r ? r.result : r); // delete returns a plain id string
-        t.onerror = () => reject(t.error);
-      }));
+        t.onerror = t.onabort = () => reject(t.error || new Error('Storage error'));
+      })).catch((e) => {
+        // iPhones sometimes lose the database connection while the app sits in the background: reconnect once and try again.
+        if (retry) { dbp = null; return tx(name, mode, fn, false); }
+        throw e;
+      });
     }
+    const saveFailed = (e) => { toast('Could not save on this phone. Its storage may be full.', 5000); throw e; };
     return {
       all(name) {
         return tx(name, 'readonly', (os) => os ? os.getAll() : Array.from(mem[name].values()));
       },
       put(name, obj) {
-        return tx(name, 'readwrite', (os) => { if (os) os.put(obj); else mem[name].set(obj.id, obj); return obj; });
+        return tx(name, 'readwrite', (os) => { if (os) os.put(obj); else mem[name].set(obj.id, obj); return obj; }).catch(saveFailed);
       },
       del(name, id) {
-        return tx(name, 'readwrite', (os) => { if (os) os.delete(id); else mem[name].delete(id); return id; });
+        return tx(name, 'readwrite', (os) => { if (os) os.delete(id); else mem[name].delete(id); return id; }).catch(saveFailed);
       },
     };
   })();
@@ -193,8 +219,12 @@
       m.getPanes().tilePane.appendChild(el);
       this._resize();
       const c = m.getCenter();
-      this.gl = new maplibregl.Map({ container: el, style: this.opts.style, interactive: false, attributionControl: false,
-        center: [c.lng, c.lat], zoom: m.getZoom() - 1, fadeDuration: 0 });
+      try {
+        this.gl = new maplibregl.Map({ container: el, style: this.opts.style, interactive: false, attributionControl: false,
+          center: [c.lng, c.lat], zoom: m.getZoom() - 1, fadeDuration: 0 });
+      } catch (e) { // older phones without WebGL 2 can't draw these maps
+        this.gl = null; setTimeout(() => this.opts.onError && this.opts.onError({ error: e, fatal: true })); return;
+      }
       this.gl.on('style.load', () => {
         // Show English names (or the Latin spelling), never Georgian or Greek script.
         for (const layer of this.gl.getStyle().layers || []) {
@@ -212,7 +242,7 @@
     },
     onRemove(m) {
       m.off('move zoom viewreset', this._sync, this); m.off('resize', this._resize, this); m.off('zoomanim', this._zoomAnim, this);
-      if (this.gl) this.gl.remove();
+      if (this.gl) { this.gl.remove(); this.gl = null; }
       L.DomUtil.remove(this._el);
     },
     _resize() {
@@ -255,7 +285,7 @@
     if (b.style && window.maplibregl && maplibregl.supported !== false) {
       baseLayer = new GLLayer({ style: b.style, attribution: b.attribution,
         onLoad: () => { loaded = true; },
-        onError: (e) => { if (!loaded && /style|fetch|Failed|404|50\d/i.test(String((e && e.error && (e.error.message || e.error.status)) || ''))) failBasemap(key, tried); } });
+        onError: (e) => { if (e.fatal) failBasemap(key, tried); else if (!loaded && /style|fetch|Failed|404|50\d/i.test(String((e && e.error && (e.error.message || e.error.status)) || ''))) failBasemap(key, tried); } });
       baseLayer.addTo(map);
       baseTimer = setTimeout(() => { if (!loaded) failBasemap(key, tried); }, 15000);
     } else if (b.style) {
@@ -305,14 +335,36 @@
   function renderWalks() {
     walksLayer.clearLayers();
     for (const w of state.walks) {
-      const pts = w.drawn ? w.points.map((p) => [p[0], p[1]]) : smoothTrail(w.points);
+      const pts = w.drawn ? w.points.map((p) => [p[0], p[1]]) : smoothed(w.points);
       w._line = L.polyline(pts, { ...walkStyle(), interactive: false }).addTo(walksLayer);
       trailHitLine(pts, (latlng) => openWalkPopup(w, latlng)).addTo(walksLayer);
     }
   }
 
+  // Small copies of photos for map pins and lists. Dozens of full-size photos as pins use a lot of a phone's memory.
+  const thumbs = new Map(), waiting = new Map(); // full photo -> small copy; full photo -> who to tell when it's made
+  let thumbQueue = Promise.resolve();
+  function thumbOf(src, onReady) {
+    if (!src) return null;
+    if (thumbs.has(src)) return thumbs.get(src);
+    if (waiting.has(src)) { if (onReady) waiting.get(src).push(onReady); return null; }
+    waiting.set(src, onReady ? [onReady] : []);
+    const ready = (small) => { thumbs.set(src, small); const cbs = waiting.get(src); waiting.delete(src); cbs.forEach((cb) => cb()); };
+    thumbQueue = thumbQueue.then(() => new Promise((done) => { // one at a time, so they don't all load at once
+      const img = new Image();
+      img.onload = () => {
+        const S = 96, c = document.createElement('canvas'); c.width = c.height = S;
+        const k = S / Math.min(img.width, img.height), w = img.width * k, hh = img.height * k;
+        c.getContext('2d').drawImage(img, (S - w) / 2, (S - hh) / 2, w, hh);
+        ready(c.toDataURL('image/jpeg', 0.8)); done();
+      };
+      img.onerror = () => { ready(src); done(); };
+      img.src = src;
+    }));
+    return null;
+  }
   function memoryIcon(m) {
-    const ph = photosOf(m)[0], style = ph ? ` style="background-image:url('${ph}')"` : '';
+    const ph = thumbOf(photosOf(m)[0], () => m._marker && m._marker.setIcon(memoryIcon(m))), style = ph ? ` style="background-image:url('${ph}')"` : '';
     return L.divIcon({
       className: '',
       html: `<div class="pin${ph ? ' has-photo' : ''}"${style}><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.4-7 10-7 10z"/></svg></div>`,
@@ -551,7 +603,7 @@
     if (!('geolocation' in navigator)) { toast('This browser cannot read GPS.'); return; }
     if (!window.isSecureContext) { toast(geoError(), 4500); return; }
     state.recording = resume || { id: uid(), startedAt: Date.now(), points: [] };
-    const startPts = smoothTrail(state.recording.points);
+    const startPts = smoothed(state.recording.points);
     state.recLine = L.layerGroup([
       L.polyline(startPts, { ...walkStyle(), opacity: 0.95, interactive: false }),
       trailHitLine(startPts, liveTrailPopup),
@@ -576,8 +628,8 @@
         if (last[2] && d / Math.max(1, (p[2] - last[2]) / 1000) > MAX_SPEED_MS && ++state.jumps < 3) return;
       }
       state.jumps = 0;
-      pts.push(p); const line = smoothTrail(pts); state.recLine.eachLayer((l) => l.setLatLngs(line)); saveRecDraft(); updateRecBanner();
-    }, (err) => { $('recText').textContent = 'GPS paused'; if (err.code === 1) { toast(geoError(err), 4500); stopRecording(false); } },
+      pts.push(p); const line = smoothed(pts); state.recLine.eachLayer((l) => l.setLatLngs(line)); saveRecDraft(); updateRecBanner();
+    }, (err) => { $('recText').textContent = 'GPS paused'; if (err.code === 1) { toast(geoError(err), 4500); stopRecording(true, true); } }, // keep what was already recorded
     { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
     if (!resume && !auto) toast('Walk started. Keep the app open while you walk.', 3500);
   }
@@ -814,7 +866,7 @@
   function replayDay(d) {
     stopReplay();
     const segs = d.walks.filter((w) => w.points.length > 1).sort((a, b) => a.startedAt - b.startedAt).map((w) => {
-      const line = w.drawn ? w.points.map((p) => [p[0], p[1]]) : smoothTrail(w.points), cum = [0];
+      const line = w.drawn ? w.points.map((p) => [p[0], p[1]]) : smoothed(w.points), cum = [0];
       for (let i = 1; i < line.length; i++) cum.push(cum[i - 1] + haversine(line[i - 1], line[i]));
       return { w, line, cum, len: cum[cum.length - 1] };
     }).filter((sg) => sg.len > 0);
@@ -927,7 +979,7 @@
       if (!list.length) continue;
       for (const w of state.walks) {
         if (!w.points.length || !inCity(c, w.points[0][0], w.points[0][1])) continue;
-        const line = w.drawn ? w.points : smoothTrail(w.points);
+        const line = w.drawn ? w.points : smoothed(w.points);
         for (let i = 1; i < line.length; i++) {
           const mid = [(line[i - 1][0] + line[i][0]) / 2, (line[i - 1][1] + line[i][1]) / 2];
           let best = null, bestD = 3000;
@@ -979,14 +1031,28 @@
   }
   // Some phones refuse download names that aren't plain Latin, so Georgian is spelled out in Latin letters.
   const latinName = (s) => NinikoPlaces.toLatin(s).replace(/[^\x20-\x7e]/g, '').replace(/\s+/g, ' ').trim();
+  // On iPhones a download from an app on the home screen often goes nowhere, so the share sheet is used instead
+  // (Save Image puts photos straight into Photos, Save to Files keeps a backup).
+  const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  function shareFiles(files) {
+    if (!IS_IOS || !navigator.share || !navigator.canShare) return false;
+    try { if (!navigator.canShare({ files })) return false; } catch (e) { return false; }
+    navigator.share({ files }).catch(() => { /* closed the share sheet */ });
+    return true;
+  }
   function saveBlob(blob, name) {
+    if (shareFiles([new File([blob], latinName(name) || 'file', { type: blob.type })])) return true;
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = latinName(name) || 'photos';
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    return false;
   }
   function downloadPhotos(memories, zipName) {
     const files = memories.flatMap(photoFiles);
     if (!files.length) { toast('No photos to download yet.'); return; }
+    if (shareFiles(files.map((f) => new File([f.bytes], latinName(f.name) || 'photo.jpg', { type: 'image/jpeg' })))) {
+      toast(files.length === 1 ? 'Tap Save Image to keep it in Photos' : `Tap Save ${files.length} Images to keep them in Photos`, 4000); return;
+    }
     if (files.length === 1) saveBlob(new Blob([files[0].bytes], { type: 'image/jpeg' }), files[0].name);
     else saveBlob(makeZip(files), zipName);
     toast(files.length === 1 ? 'Photo downloaded' : `${files.length} photos downloaded as one .zip file`, 3000);
@@ -1032,7 +1098,7 @@
         if (!days.length) { ul.innerHTML = '<li class="empty" style="cursor:default">Your trip diary fills in here, one line per day you walked or saved a memory.</li>'; return; }
         for (const d of days) {
           const li = document.createElement('li');
-          const thumb = d.memories.map((m) => photosOf(m)[0]).find(Boolean);
+          const full = d.memories.map((m) => photosOf(m)[0]).find(Boolean), thumb = full && (thumbOf(full) || full);
           li.innerHTML = `${thumb ? `<img class="thumb" src="${thumb}" alt="">` : '<span class="walk-sw"></span>'}
             <div class="txt"><div class="t">${esc(fmtDayLong(d.key))}</div><div class="s">${esc(daySummary(d))}</div></div>`;
           li.onclick = () => showDay(d.key);
@@ -1067,7 +1133,7 @@
       for (const it of items) {
         const li = document.createElement('li');
         if (listTab === 'memories') {
-          li.innerHTML = `${photosOf(it)[0] ? `<img class="thumb" src="${photosOf(it)[0]}" alt="">` : '<span class="thumb"><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.4-7 10-7 10z"/></svg></span>'}
+          li.innerHTML = `${photosOf(it)[0] ? `<img class="thumb" src="${thumbOf(photosOf(it)[0]) || photosOf(it)[0]}" alt="">` : '<span class="thumb"><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.4-7 10-7 10z"/></svg></span>'}
             <div class="txt"><div class="t">${esc(it.title)}</div><div class="s">${it.date ? fmtDate(it.date) : ''}${photosOf(it).length > 1 ? ` · ${photosOf(it).length} photos` : ''}</div></div>
             ${photosOf(it).length ? '<button class="icon-btn row-dl" type="button" aria-label="Download photos"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg></button>' : ''}`;
           const dlb = li.querySelector('.row-dl');
@@ -1136,12 +1202,7 @@
   function exportBackup() {
     const strip = (o) => { const c = { ...o }; delete c._marker; return c; };
     const data = { app: 'niniko-map', version: 1, exportedAt: new Date().toISOString(), walks: state.walks.map(strip), memories: state.memories.map(strip), visited: places.exportVisited() };
-    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob); a.download = `batumi-map-backup-${todayISO()}.json`;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    toast('Backup saved to your downloads');
+    if (!saveBlob(new Blob([JSON.stringify(data)], { type: 'application/json' }), `batumi-map-backup-${todayISO()}.json`)) toast('Backup saved to your downloads');
   }
   $('importFile').onchange = async (e) => {
     const f = e.target.files && e.target.files[0]; e.target.value = '';
@@ -1276,6 +1337,7 @@
   }
 
   async function addPhotosTo(m, photos, isNew) {
+    if (!isNew) m = state.memories.find((x) => x.id === m.id) || m; // the newest copy, in case it was edited meanwhile
     const clean = { ...m, photos: photosOf(m).concat(photos) }; delete clean._marker;
     clean.photo = clean.photos[0];
     await store.put('memories', clean);
@@ -1286,6 +1348,9 @@
     map.setView([clean.lat, clean.lng], Math.max(map.getZoom(), 17));
     setTimeout(() => mk && mk.openPopup(), 300);
   }
+
+  // Ask the browser to keep this app's data when the phone runs low on space or the app isn't opened for a while.
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persisted().then((p) => p || navigator.storage.persist()).catch(() => {}); } catch (e) { /* ignore */ }
 
   load().then(() => {
     if (state.walks.length || state.memories.length) fitAll();

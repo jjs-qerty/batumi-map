@@ -1,5 +1,5 @@
 /* Keeps the app working offline. Map tiles are left to the browser's own cache. */
-const APP_CACHE = 'niniko-app-v14';
+const APP_CACHE = 'niniko-app-v15';
 const APP_FILES = ['./', 'index.html', 'app.css', 'app.js', 'poi.js', 'vendor/leaflet.css', 'vendor/leaflet.js', 'vendor/maplibre-gl.css', 'vendor/maplibre-gl.js',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
@@ -18,10 +18,15 @@ self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
 
   // App files: network first so updates arrive, fall back to the saved copy offline.
+  // On a weak connection, use the saved copy after a few seconds instead of waiting (the download still updates it).
   if (url.origin === self.location.origin) {
-    e.respondWith(fetch(e.request).then((res) => {
+    const net = fetch(e.request).then((res) => {
       if (res.ok) { const copy = res.clone(); caches.open(APP_CACHE).then((c) => c.put(e.request, copy)); }
       return res;
-    }).catch(() => caches.match(e.request).then((r) => r || caches.match('index.html'))));
+    });
+    const saved = () => caches.match(e.request).then((r) => r || caches.match('index.html'));
+    const slow = new Promise((resolve) => setTimeout(() => caches.match(e.request).then((r) => r && resolve(r)), 4000));
+    e.respondWith(Promise.race([net, slow]).catch(saved));
+    e.waitUntil(net.catch(() => {}));
   }
 });

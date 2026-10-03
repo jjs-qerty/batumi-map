@@ -234,7 +234,11 @@
     }
     return open ? { open: true, text: 'Open now' } : { open: false, text: 'Closed' };
   }
-  function isOpenNow(raw) { const w = parseHours(raw); if (!w) return null; const n = cityNow(); return isOpenAt(w, n.day, n.min); }
+  const hoursCache = new Map(); // the same opening-hours text is read once, not on every redraw
+  function isOpenNow(raw, now) {
+    if (!hoursCache.has(raw)) { let w = null; try { w = parseHours(raw); } catch (e) { /* hours written in a way we can't read */ } hoursCache.set(raw, w); }
+    const w = hoursCache.get(raw); if (!w) return null; const n = now || cityNow(); return isOpenAt(w, n.day, n.min);
+  }
 
   // ---------- data ----------
   function overpassQuery(city) {
@@ -270,7 +274,10 @@
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctrl.signal });
         clearTimeout(timer);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        return await res.json();
+        const json = await res.json();
+        // A busy server can answer "OK" with an error note and no places; try the next one instead of keeping an empty map.
+        if (json.remark && /error|timed out|out of memory/i.test(json.remark)) throw new Error(json.remark);
+        return json;
       } catch (e) { lastErr = e; }
     }
     throw lastErr;
@@ -288,7 +295,7 @@
       name: e.tags ? englishName(e.tags) : '',
       lat: e.lat ?? (e.center && e.center.lat), lng: e.lon ?? (e.center && e.center.lon),
     })).filter((d) => d.name && d.lat != null);
-    try { localStorage.setItem(key, JSON.stringify({ at: Date.now(), items })); } catch (e) { /* full */ }
+    if (items.length) try { localStorage.setItem(key, JSON.stringify({ at: Date.now(), items })); } catch (e) { /* full */ }
     return items;
   }
 
@@ -438,9 +445,9 @@
     });
 
     function render() {
-      const z = map.getZoom(), view = map.getBounds().pad(0.3), c = map.getCenter();
+      const z = map.getZoom(), view = map.getBounds().pad(0.3), c = map.getCenter(), now = openOnly ? cityNow() : null;
       const list = places.filter((p) => filters[p.cat] && (!popularOnly || p.popular) && z >= (MIN_ZOOM[p.cat] || 0) && view.contains([p.lat, p.lng])
-        && (!openOnly || isOpenNow(p.tags.opening_hours) === true)
+        && (!openOnly || isOpenNow(p.tags.opening_hours, now) === true)
         && (visitMode === 'all' || (visitMode === 'done') === !!visited[p.id]));
       // Too many markers make the map messy and slow on a phone, so keep the ones nearest the middle of the screen.
       const cos = Math.cos(c.lat * Math.PI / 180), d2 = (p) => ((p.lng - c.lng) * cos) ** 2 + (p.lat - c.lat) ** 2;
@@ -493,7 +500,7 @@
       const cached = readCache(c);
       setPlaces(cached && cached.items ? cached.items : []);
       if (!cached || Date.now() - cached.at > CACHE_DAYS * 864e5) {
-        fetchPlaces(c).then((items) => { writeCache(c, items); if (city === c) setPlaces(items); })
+        fetchPlaces(c).then((items) => { if (!items.length) throw new Error('no places'); writeCache(c, items); if (city === c) setPlaces(items); })
           .catch(() => { if (!cached && city === c) opts.toast && opts.toast('Could not load places right now. They will appear when you are online.'); });
       }
     }
