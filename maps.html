@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Map Catalogue</title>
+  <meta name="description" content="Free map styles to choose from for Niniko's Map, previewed over Batumi, Tbilisi and Ayia Napa.">
+  <meta name="theme-color" content="#0f4c5c">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="vendor/maplibre-gl.css">
+  <style>
+    :root {
+      --sea: #0f4c5c; --sea-soft: #e3eff1; --ink: #14262b; --muted: #5d7177; --line: #d6e0e2;
+      --surface: #ffffff; --surface-2: #f3f6f6; --bg: #eef3f4; --good: #2b8a3e; --warn: #b35c00;
+      --radius: 14px; --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) { --ink: #e7f0f2; --muted: #9db1b6; --surface: #141f22; --surface-2: #1c2a2e; --bg: #0d1517; --line: #2a3a3f; --sea-soft: #173238; --good: #6fcf86; --warn: #f0a24a; }
+    }
+    :root[data-theme="dark"] { --ink: #e7f0f2; --muted: #9db1b6; --surface: #141f22; --surface-2: #1c2a2e; --bg: #0d1517; --line: #2a3a3f; --sea-soft: #173238; --good: #6fcf86; --warn: #f0a24a; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 var(--font); }
+    header { padding: 16px 16px 8px; max-width: 760px; margin: 0 auto; }
+    h1 { font-size: 21px; margin: 0 0 2px; color: var(--sea); }
+    :root:not([data-theme="light"]) h1 { color: var(--ink); }
+    header p { margin: 0; color: var(--muted); }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 0 16px 32px; }
+    .stage { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 8px 0 10px; }
+    #map { height: 40vh; min-height: 240px; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--line); background: var(--surface-2); }
+    .bar { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+    .now { font-weight: 700; flex: 1 1 100%; }
+    .now span { font-weight: 400; color: var(--muted); }
+    .seg { display: flex; background: var(--surface-2); border-radius: 10px; padding: 3px; gap: 2px; }
+    .seg button { border: 0; background: transparent; color: var(--muted); font: inherit; font-weight: 600; padding: 6px 10px; border-radius: 8px; cursor: pointer; }
+    .seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+    h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 8px; }
+    .list { display: grid; gap: 8px; }
+    .card { display: grid; grid-template-columns: 34px 1fr; gap: 10px; align-items: start; text-align: left; width: 100%;
+      background: var(--surface); border: 2px solid var(--line); border-radius: var(--radius); padding: 12px; cursor: pointer; color: inherit; font: inherit; }
+    .card[aria-pressed="true"] { border-color: var(--sea); background: var(--sea-soft); }
+    :root:not([data-theme="light"]) .card[aria-pressed="true"] { border-color: var(--good); }
+    .num { width: 34px; height: 34px; border-radius: 50%; background: var(--sea); color: #fff; display: grid; place-items: center; font-weight: 800; }
+    .card b { display: block; font-size: 16px; }
+    .card .by { color: var(--muted); font-size: 13px; }
+    .card p { margin: 4px 0 6px; }
+    .tags { display: flex; gap: 6px; flex-wrap: wrap; }
+    .tag { font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
+    .tag.en { color: var(--good); }
+    .tag.local { color: var(--warn); }
+    .note { color: var(--muted); font-size: 13.5px; margin-top: 14px; }
+    .err { position: absolute; inset: auto 8px 8px 8px; background: var(--surface); color: var(--ink); padding: 8px 10px; border-radius: 10px; font-size: 13px; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
+    .mapbox { position: relative; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Map catalogue</h1>
+    <p>Free maps that need no account or key. Tap one to preview it, then tell me the numbers you like.</p>
+  </header>
+  <div class="wrap">
+    <div class="stage">
+      <div class="mapbox"><div id="map"></div><div class="err" id="err" hidden></div></div>
+      <div class="bar">
+        <div class="now" id="now"></div>
+        <div class="seg" id="cities">
+          <button type="button" data-c="batumi" aria-pressed="true">Batumi</button>
+          <button type="button" data-c="tbilisi" aria-pressed="false">Tbilisi</button>
+          <button type="button" data-c="ayianapa" aria-pressed="false">Ayia Napa</button>
+        </div>
+      </div>
+    </div>
+    <h2>English labels</h2>
+    <div class="list" id="listEn"></div>
+    <h2>Local-language labels (Georgian, Greek)</h2>
+    <div class="list" id="listLocal"></div>
+    <p class="note">Every map here is free to use with credit to its makers, which the app shows in the corner. Maps that need a sign-up or API key (Mapbox, MapTiler, Stadia, Thunderforest, Google, CARTO) are left out.</p>
+  </div>
+
+  <script src="vendor/maplibre-gl.js"></script>
+  <script>
+  (function () {
+    'use strict';
+    const CITIES = {
+      batumi: { center: [41.6365, 41.6455], zoom: 15 },   // Old Batumi and the Boulevard
+      tbilisi: { center: [44.8075, 41.6905], zoom: 15 },  // Old Tbilisi
+      ayianapa: { center: [33.9997, 34.9875], zoom: 15 },  // Ayia Napa centre and harbour
+    };
+    const OSM = '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+    const ESRI = 'Tiles © Esri, sources: Esri, HERE, Garmin, ' + OSM;
+    const raster = (tiles, attribution, maxzoom = 19, overlay) => ({
+      version: 8,
+      sources: Object.assign({ base: { type: 'raster', tiles, tileSize: 256, maxzoom, attribution } },
+        overlay ? { labels: { type: 'raster', tiles: overlay, tileSize: 256, maxzoom } } : {}),
+      layers: [{ id: 'base', type: 'raster', source: 'base' }].concat(overlay ? [{ id: 'labels', type: 'raster', source: 'labels' }] : []),
+    });
+    const esri = (path) => 'https://server.arcgisonline.com/ArcGIS/rest/services/' + path + '/MapServer/tile/{z}/{y}/{x}';
+
+    // english: true when the map shows English names. Vector maps are switched to English names here.
+    const MAPS = [
+      { name: 'Liberty', by: 'OpenFreeMap · vector', english: true, current: false,
+        about: 'Bright and colourful with clear streets, green parks and blue sea. Sharp on any zoom, can show 3D buildings.',
+        style: 'https://tiles.openfreemap.org/styles/liberty' },
+      { name: 'Bright', by: 'OpenFreeMap · vector', english: true,
+        about: 'Classic, cheerful street map with lots of colour and icons.',
+        style: 'https://tiles.openfreemap.org/styles/bright' },
+      { name: 'Positron', by: 'OpenFreeMap · vector', english: true,
+        about: 'Very light and calm, almost white. Your trails and photos stand out the most.',
+        style: 'https://tiles.openfreemap.org/styles/positron' },
+      { name: 'Colorful', by: 'VersaTiles · vector', english: true,
+        about: 'Soft pastel colours with a modern look. Friendly and easy to read.',
+        style: 'https://tiles.versatiles.org/assets/styles/colorful/style.json' },
+      { name: 'Neutrino', by: 'VersaTiles · vector', english: true,
+        about: 'Minimal and gentle, warm grey tones. Quiet background for your journey.',
+        style: 'https://tiles.versatiles.org/assets/styles/neutrino/style.json' },
+      { name: 'Street', by: 'Esri · images', english: true, current: true,
+        about: 'The map the app uses now. Traditional road-atlas look.',
+        style: raster([esri('World_Street_Map')], ESRI) },
+      { name: 'Topographic', by: 'Esri · images', english: true,
+        about: 'Natural colours with hills shaded in. Nice for hikes and the mountains around Batumi.',
+        style: raster([esri('World_Topo_Map')], ESRI) },
+      { name: 'Satellite', by: 'Esri · images', english: true,
+        about: 'Real photos from above with English place names on top. Great for remembering where you were.',
+        style: raster([esri('World_Imagery')], ESRI, 19, [esri('Reference/World_Boundaries_and_Places')]) },
+      { name: 'Light grey', by: 'Esri · images', english: true,
+        about: 'Plain light grey canvas with English names. Very simple.',
+        style: raster([esri('Canvas/World_Light_Gray_Base')], ESRI, 16, [esri('Canvas/World_Light_Gray_Reference')]) },
+      { name: 'OpenStreetMap', by: 'OpenStreetMap · images', english: false,
+        about: 'The standard OpenStreetMap. Very detailed, a bit busy. The app’s "Bright" style.',
+        style: raster(['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], OSM) },
+      { name: 'OSM France', by: 'OpenStreetMap France · images', english: false,
+        about: 'Warm colours and many shop and café icons. The app’s "Colourful" style.',
+        style: raster(['https://a.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png', 'https://b.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png'], OSM + ', OSM France', 20) },
+      { name: 'Humanitarian', by: 'OpenStreetMap · images', english: false,
+        about: 'Simple and high-contrast, made for aid workers. Easy to read in sunlight.',
+        style: raster(['https://a.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png', 'https://b.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png'], OSM + ', Humanitarian OSM Team', 20) },
+      { name: 'OpenTopoMap', by: 'OpenTopoMap · images', english: false,
+        about: 'Hiking-style map with contour lines. Best outside the city.',
+        style: raster(['https://a.tile.opentopomap.org/{z}/{x}/{y}.png', 'https://b.tile.opentopomap.org/{z}/{x}/{y}.png'], OSM + ', SRTM, © OpenTopoMap (CC-BY-SA)', 17) },
+      { name: 'CyclOSM', by: 'CyclOSM · images', english: false,
+        about: 'Very detailed, shows paths, benches and bike lanes. Busy in the centre.',
+        style: raster(['https://a.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png', 'https://b.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png'], OSM + ', CyclOSM', 20) },
+    ];
+
+    const $ = (id) => document.getElementById(id);
+    let city = 'batumi', pick = 0;
+    const map = new maplibregl.Map({ container: 'map', style: MAPS[0].style, center: CITIES.batumi.center, zoom: CITIES.batumi.zoom,
+      attributionControl: { compact: true }, maxZoom: 19 });
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+
+    // Vector maps: show English names (or Latin spelling), never Georgian or Greek script.
+    const EN_NAME = ['coalesce', ['get', 'name:en'], ['get', 'name_en'], ['get', 'name:latin'], ['get', 'name_int'], ['get', 'name']];
+    function toEnglish() {
+      if (!MAPS[pick].english || typeof MAPS[pick].style !== 'string') return;
+      for (const layer of map.getStyle().layers || []) {
+        if (layer.type !== 'symbol') continue;
+        const tf = map.getLayoutProperty(layer.id, 'text-field');
+        if (tf && /name/.test(JSON.stringify(tf))) map.setLayoutProperty(layer.id, 'text-field', EN_NAME);
+      }
+    }
+    map.on('style.load', () => { $('err').hidden = true; toEnglish(); });
+    let errTimer;
+    map.on('error', () => {
+      clearTimeout(errTimer);
+      errTimer = setTimeout(() => { $('err').textContent = `${MAPS[pick].name} isn't loading right now. Its server may be busy, so try again later.`; $('err').hidden = false; }, 1500);
+    });
+    map.on('data', (e) => { if (e.dataType === 'source' && e.isSourceLoaded) { clearTimeout(errTimer); } });
+
+    function card(m, i) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'card'; b.setAttribute('aria-pressed', i === pick);
+      b.innerHTML = `<span class="num">${i + 1}</span><span><b>${m.name}</b><span class="by">${m.by}</span><p>${m.about}</p>
+        <span class="tags">${m.english ? '<span class="tag en">English labels</span>' : '<span class="tag local">Local labels</span>'}${m.current ? '<span class="tag">In the app now</span>' : ''}</span></span>`;
+      b.onclick = () => choose(i);
+      return b;
+    }
+    function render() {
+      $('listEn').innerHTML = ''; $('listLocal').innerHTML = '';
+      MAPS.forEach((m, i) => (m.english ? $('listEn') : $('listLocal')).appendChild(card(m, i)));
+      $('now').innerHTML = `${pick + 1}. ${MAPS[pick].name} <span>· ${MAPS[pick].by.split(' · ')[0]}</span>`;
+    }
+    function choose(i) {
+      pick = i; $('err').hidden = true;
+      map.setStyle(MAPS[i].style);
+      render();
+    }
+    $('cities').onclick = (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      city = b.dataset.c;
+      document.querySelectorAll('#cities button').forEach((x) => x.setAttribute('aria-pressed', x === b));
+      map.jumpTo({ center: CITIES[city].center, zoom: CITIES[city].zoom });
+    };
+    render();
+  })();
+  </script>
+</body>
