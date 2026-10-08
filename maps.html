@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Map Catalogue</title>
-  <meta name="description" content="Free map styles to choose from for Niniko's Map, previewed over Batumi, Tbilisi and Ayia Napa.">
+  <meta name="description" content="Free map styles to choose from for Niniko's Map, previewed over Batumi, Tbilisi, Ayia Napa and Larnaca.">
   <meta name="theme-color" content="#0f4c5c">
   <link rel="icon" href="icons/icon-192.png">
   <link rel="stylesheet" href="vendor/maplibre-gl.css">
@@ -66,6 +66,7 @@
           <button type="button" data-c="batumi" aria-pressed="true">Batumi</button>
           <button type="button" data-c="tbilisi" aria-pressed="false">Tbilisi</button>
           <button type="button" data-c="ayianapa" aria-pressed="false">Ayia Napa</button>
+          <button type="button" data-c="larnaca" aria-pressed="false">Larnaca</button>
         </div>
       </div>
     </div>
@@ -84,6 +85,7 @@
       batumi: { center: [41.6365, 41.6455], zoom: 15 },   // Old Batumi and the Boulevard
       tbilisi: { center: [44.8075, 41.6905], zoom: 15 },  // Old Tbilisi
       ayianapa: { center: [33.9997, 34.9875], zoom: 15 },  // Ayia Napa centre and harbour
+      larnaca: { center: [33.6350, 34.9150], zoom: 15 },   // Larnaca seafront (Finikoudes)
     };
     const OSM = '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
     const ESRI = 'Tiles © Esri, sources: Esri, HERE, Garmin, ' + OSM;

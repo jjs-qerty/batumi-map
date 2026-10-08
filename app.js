@@ -8,6 +8,8 @@
     tbilisi: { name: 'Tbilisi', country: 'Georgia', center: [41.6925, 44.8030], box: [41.640, 44.700, 41.800, 44.920], tz: 'Asia/Tbilisi' },
     // Ayia Napa town with Cape Greco and Protaras. Cyprus time (UTC+2, +3 in summer).
     ayianapa: { name: 'Ayia Napa', country: 'Cyprus', center: [34.9886, 33.9997], box: [34.955, 33.920, 35.035, 34.095], tz: 'Asia/Nicosia' },
+    // Larnaca town and seafront, the Salt Lake, the airport, Mackenzie beach, Oroklini and Aradippou.
+    larnaca: { name: 'Larnaca', country: 'Cyprus', center: [34.9150, 33.6350], box: [34.855, 33.560, 34.985, 33.720], tz: 'Asia/Nicosia' },
   };
   const CITY_KEY = 'niniko.city';
   let city = (() => { try { return CITIES[localStorage.getItem(CITY_KEY)] ? localStorage.getItem(CITY_KEY) : 'batumi'; } catch (e) { return 'batumi'; } })();

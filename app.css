@@ -204,7 +204,9 @@ button { font: inherit; color: inherit; }
 .tabs button { flex: 1; border: 0; background: transparent; padding: 8px; border-radius: 9px; font-weight: 650; color: var(--muted); cursor: pointer; }
 .tabs button[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12); }
 .city-tabs { margin-bottom: 12px; }
-.city-tabs button { padding: 8px 4px; font-size: 14px; white-space: nowrap; }
+.city-tabs { overflow-x: auto; scrollbar-width: none; flex-shrink: 0; }
+.city-tabs::-webkit-scrollbar { display: none; }
+.city-tabs button { flex: 1 0 auto; padding: 8px 6px; font-size: 14px; white-space: nowrap; }
 .summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .summary div { background: var(--sea-soft); border-radius: 12px; padding: 10px; }
 .summary b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
