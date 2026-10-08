@@ -24,6 +24,9 @@ for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
   cp ../icons/icon-192.png "$RES/mipmap-$d/ic_launcher_round.png"
 done
 
+# Version shown in Android's app info; a higher number installs as an update over the earlier test app.
+sed -i 's/versionCode 1$/versionCode 2/; s/versionName "1.0"$/versionName "2026-10-08"/' android/app/build.gradle
+
 # Sign with the app's own key, so it installs over the earlier test app and keeps its data.
 cat >> android/app/build.gradle <<'GRADLE'
 

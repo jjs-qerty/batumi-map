@@ -1,7 +1,7 @@
 {
   "name": "Niniko's Map",
   "short_name": "Niniko's Map",
-  "description": "A map of Batumi, Tbilisi and Ayia Napa that remembers the streets you walked and the places where memories were made.",
+  "description": "A map of Batumi, Tbilisi, Ayia Napa and Larnaca that remembers the streets you walked and the places where memories were made.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

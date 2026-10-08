@@ -7,9 +7,10 @@
     batumi: '41.565,41.555,41.700,41.720',  // Gonio to the Botanical Garden
     tbilisi: '41.640,44.700,41.800,44.920', // Old Tbilisi, Vake, Saburtalo, Didube, Isani
     ayianapa: '34.955,33.920,35.035,34.095', // Ayia Napa, Cape Greco, Protaras
+    larnaca: '34.855,33.560,34.985,33.720',  // Larnaca, Salt Lake, airport, Mackenzie, Oroklini, Aradippou
   };
   // Opening hours are read in each city's local time.
-  const TZ = { batumi: 'Asia/Tbilisi', tbilisi: 'Asia/Tbilisi', ayianapa: 'Asia/Nicosia' };
+  const TZ = { batumi: 'Asia/Tbilisi', tbilisi: 'Asia/Tbilisi', ayianapa: 'Asia/Nicosia', larnaca: 'Asia/Nicosia' };
   let tz = TZ.batumi;
   const OVERPASS = [
     'https://overpass-api.de/api/interpreter',
@@ -127,6 +128,7 @@
   ];
   // No ticket notes for Ayia Napa yet: we only list prices we have checked.
   TICKETS_BY_CITY.ayianapa = [];
+  TICKETS_BY_CITY.larnaca = []; // same for Larnaca
   let TICKETS = TICKETS_BY_CITY.batumi;
   let currency = 'GEL';
 
@@ -496,7 +498,7 @@
     let city = null;
     function setCity(c) {
       if (!BBOX[c] || c === city) return;
-      city = c; TICKETS = TICKETS_BY_CITY[c] || []; tz = TZ[c] || tz; currency = c === 'ayianapa' ? '' : 'GEL';
+      city = c; TICKETS = TICKETS_BY_CITY[c] || []; tz = TZ[c] || tz; currency = TZ[c] === 'Asia/Nicosia' ? '' : 'GEL'; // no fee guesses for Cyprus
       const cached = readCache(c);
       setPlaces(cached && cached.items ? cached.items : []);
       if (!cached || Date.now() - cached.at > CACHE_DAYS * 864e5) {
