@@ -324,7 +324,7 @@
     memories: [],
     recording: null,  // { id, startedAt, points: [[lat,lng,t]] }
     recLine: null,
-    watchId: null,
+    stopGps: null,
     wakeLock: null,
     mode: 'idle',     // idle | pickMemory | drawWalk
     draw: null,       // { points: [], line, vertices }
@@ -627,6 +627,33 @@
     markTrailPoint(near);
   }
 
+  // GPS for recording. In the Android app it runs as a foreground service (a notification shows while it records),
+  // so Android keeps giving precise GPS fixes every second even with the app closed or the screen off.
+  // Elsewhere it's the browser's own GPS. Returns a function that stops it.
+  const BG = NATIVE && window.Capacitor.getPlatform && window.Capacitor.getPlatform() === 'android' ? plugin('BackgroundGeolocation') : null;
+  function watchGps(onPos, onErr) {
+    const browser = () => {
+      const id = navigator.geolocation.watchPosition(onPos, onErr, { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
+      return () => navigator.geolocation.clearWatch(id);
+    };
+    if (!BG) return browser();
+    let id = null, stopped = false, fallback = null;
+    BG.addWatcher({ backgroundTitle: "Niniko's Map", backgroundMessage: 'Recording your walk with precise GPS.', requestPermissions: true, stale: false, distanceFilter: 0 },
+      (loc, err) => {
+        if (stopped) return;
+        if (err) {
+          // Precise location not allowed (or location is off): say how to fix it, and keep going with the phone's normal GPS.
+          if (err.code === 'NOT_AUTHORIZED' && !fallback) {
+            toast('For accurate trails, allow Precise location: Settings > Apps > Niniko\'s Map > Permissions > Location.', 7000);
+            fallback = browser();
+          }
+          return;
+        }
+        if (loc) onPos({ coords: { latitude: loc.latitude, longitude: loc.longitude, accuracy: loc.accuracy == null ? 10 : loc.accuracy }, timestamp: loc.time || Date.now() });
+      }).then((wid) => { id = wid; if (stopped) BG.removeWatcher({ id }); }).catch(() => { if (!stopped && !fallback) fallback = browser(); });
+    return () => { stopped = true; if (id != null) BG.removeWatcher({ id }).catch(() => {}); if (fallback) fallback(); };
+  }
+
   function startRecording(resume, auto) {
     if (!('geolocation' in navigator)) { toast('This browser cannot read GPS.'); return; }
     if (!secure()) { toast(geoError(), 4500); return; }
@@ -642,7 +669,7 @@
     updateRecBanner(); recTick = setInterval(updateRecBanner, 1000);
     requestWakeLock();
     let first = true;
-    state.watchId = navigator.geolocation.watchPosition((pos) => {
+    state.stopGps = watchGps((pos) => {
       const { latitude: lat, longitude: lng, accuracy } = pos.coords;
       showMe(lat, lng, accuracy);
       if (first) { first = false; map.setView([lat, lng], Math.max(map.getZoom(), 17)); }
@@ -657,15 +684,14 @@
       }
       state.jumps = 0;
       pts.push(p); const line = smoothed(pts); state.recLine.eachLayer((l) => l.setLatLngs(line)); saveRecDraft(); updateRecBanner();
-    }, (err) => { $('recText').textContent = 'GPS paused'; if (err.code === 1) { toast(geoError(err), 4500); stopRecording(true, true); } }, // keep what was already recorded
-    { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
-    if (!resume && !auto) toast('Walk started. Keep the app open while you walk.', 3500);
+    }, (err) => { $('recText').textContent = 'GPS paused'; if (err.code === 1) { toast(geoError(err), 4500); stopRecording(true, true); } }); // keep what was already recorded
+    if (!resume && !auto) toast(BG ? 'Walk started. It keeps recording with the app closed.' : 'Walk started. Keep the app open while you walk.', 3500);
   }
 
   // quiet: save without asking for a name (used for automatic trails).
   function stopRecording(save, quiet) {
-    if (state.watchId != null) navigator.geolocation.clearWatch(state.watchId);
-    state.watchId = null;
+    if (state.stopGps) state.stopGps();
+    state.stopGps = null;
     clearInterval(recTick);
     if (state.wakeLock) { state.wakeLock.release().catch(() => {}); state.wakeLock = null; }
     document.body.classList.remove('recording');
@@ -1123,7 +1149,7 @@
       </div>
       <ul class="list" id="listItems"></ul>
       <label class="switch-row" for="autoRec"><span><b>Record my trail whenever the app is open</b>
-        <span class="note">Starts by itself when you open the app. A break of more than 30 minutes starts a new walk.</span></span>
+        <span class="note">Starts by itself when you open the app${BG ? ' and keeps going with the app closed (you will see a notification)' : ''}. A break of more than 30 minutes starts a new walk.</span></span>
         <input type="checkbox" id="autoRec" role="switch"></label>
       <div class="section-title">More</div>
       <div class="more">

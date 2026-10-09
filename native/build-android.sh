@@ -25,7 +25,15 @@ for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
 done
 
 # Version shown in Android's app info; a higher number installs as an update over the earlier test app.
-sed -i 's/versionCode 1$/versionCode 2/; s/versionName "1.0"$/versionName "2026-10-08"/' android/app/build.gradle
+sed -i 's/versionCode 1$/versionCode 3/; s/versionName "1.0"$/versionName "2026-10-09"/' android/app/build.gradle
+
+# Name of the notification shown while a walk records in the background.
+cat > "$RES/values/niniko.xml" <<'XML'
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="capacitor_background_geolocation_notification_channel_name">Walk recording</string>
+</resources>
+XML
 
 # Sign with the app's own key, so it installs over the earlier test app and keeps its data.
 cat >> android/app/build.gradle <<'GRADLE'

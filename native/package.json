@@ -3,6 +3,7 @@
   "private": true,
   "description": "Phone app wrapper (Android and iPhone) for one frozen test version of Niniko's Map, built by .github/workflows/phone-app.yml",
   "dependencies": {
+    "@capacitor-community/background-geolocation": "1.2.26",
     "@capacitor-community/keep-awake": "7.1.0",
     "@capacitor/android": "7.6.9",
     "@capacitor/core": "7.6.9",
